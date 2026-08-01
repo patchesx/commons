@@ -133,6 +133,9 @@ features:
   app_home:
     home_tab_enabled: true
     messages_tab_enabled: false
+  bot_user:
+    display_name: %s
+    always_online: false
 oauth_config:
   scopes:
     bot:
@@ -155,7 +158,34 @@ settings:
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false
-`, orgName, baseURL, eventsSlug, baseURL, interactionsSlug)
+`, orgName, botDisplayName(orgName), baseURL, eventsSlug, baseURL, interactionsSlug)
+}
+
+// botDisplayName derives a Slack-compatible bot display name from an
+// organization name. Slack allows only a-z, 0-9, -, _, and . (max 80 chars).
+func botDisplayName(orgName string) string {
+	s := strings.ToLower(orgName)
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-' || r == '_' || r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	s = b.String()
+	for strings.Contains(s, "--") {
+		s = strings.ReplaceAll(s, "--", "-")
+	}
+	s = strings.Trim(s, "-_.")
+	if s == "" {
+		s = "commons"
+	}
+	if len(s) > 80 {
+		s = strings.TrimRight(s[:80], "-_.")
+	}
+	return s
 }
 
 func renderSetupCard(webhookWarning bool) string {
