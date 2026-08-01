@@ -174,6 +174,18 @@ func RemoveGroupFromUser(ctx context.Context, pool *pgxpool.Pool, userID string)
 	return err
 }
 
+// EnsureDefaultRoleGroup assigns the 'members' role group to a user who does not
+// already have one. No-ops if the user already has a group (e.g. administrators),
+// so it is safe to call for both new and existing users.
+func EnsureDefaultRoleGroup(ctx context.Context, pool *pgxpool.Pool, userID string) error {
+	_, err := pool.Exec(ctx,
+		`INSERT INTO user_role_groups (user_id, group_id)
+		 SELECT $1, id FROM role_groups WHERE name = 'members'
+		 ON CONFLICT (user_id) DO NOTHING`,
+		userID)
+	return err
+}
+
 // GetUserGroup returns the role group assigned to a user, or ErrNotFound if none.
 func GetUserGroup(ctx context.Context, pool *pgxpool.Pool, userID string) (*RoleGroup, error) {
 	g := &RoleGroup{}

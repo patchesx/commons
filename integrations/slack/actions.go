@@ -160,6 +160,9 @@ func dispatchEvent(ctx context.Context, pool *pgxpool.Pool, encKey []byte, body 
 				log.Printf("slack/events: team_join upsert %s: %v", u.ID, err)
 				return
 			}
+			if err := store.EnsureDefaultRoleGroup(bgCtx, pool, user.ID); err != nil {
+				log.Printf("slack/events: team_join assign default group %s: %v", u.ID, err)
+			}
 			if u.Profile.Email != "" {
 				if err := store.UpdateUserEmail(bgCtx, pool, user.ID, u.Profile.Email); err != nil {
 					log.Printf("slack/events: team_join update email %s: %v", u.ID, err)

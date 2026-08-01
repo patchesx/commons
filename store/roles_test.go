@@ -150,3 +150,37 @@ func TestListUsersWithPermission(t *testing.T) {
 	assert.Contains(t, ids, alice.ID)
 	assert.NotContains(t, ids, bob.ID)
 }
+
+func TestEnsureDefaultRoleGroupAssignsMembers(t *testing.T) {
+	ctx := context.Background()
+	pool := testhelpers.SetupTestDB(t)
+
+	u, err := GetOrCreateUserByIdentity(ctx, pool, "slack", "U_DEFAULT_GRP", "defuser", "Default Group")
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureDefaultRoleGroup(ctx, pool, u.ID))
+
+	g, err := GetUserGroup(ctx, pool, u.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "members", g.Name)
+}
+
+func TestEnsureDefaultRoleGroupDoesNotOverwriteExisting(t *testing.T) {
+	ctx := context.Background()
+	pool := testhelpers.SetupTestDB(t)
+
+	u, err := GetOrCreateUserByIdentity(ctx, pool, "slack", "U_NO_OVERWRITE", "now", "No Overwrite")
+	require.NoError(t, err)
+
+	// Assign a custom group first.
+	custom, err := CreateRoleGroup(ctx, pool, "test-custom-group", "", "")
+	require.NoError(t, err)
+	require.NoError(t, AssignGroupToUser(ctx, pool, u.ID, custom.ID))
+
+	// EnsureDefaultRoleGroup should be a no-op.
+	require.NoError(t, EnsureDefaultRoleGroup(ctx, pool, u.ID))
+
+	g, err := GetUserGroup(ctx, pool, u.ID)
+	require.NoError(t, err)
+	assert.Equal(t, custom.ID, g.ID)
+}

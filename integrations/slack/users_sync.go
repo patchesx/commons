@@ -109,6 +109,9 @@ func SyncAllUsers(ctx context.Context, pool *pgxpool.Pool) {
 			log.Printf("slack/users_sync: upsert %s: %v", u.ID, err)
 			continue
 		}
+		if err := store.EnsureDefaultRoleGroup(ctx, pool, user.ID); err != nil {
+			log.Printf("slack/users_sync: assign default group %s: %v", u.ID, err)
+		}
 		if err := store.UpdateIdentityStatus(ctx, pool, "slack", u.ID, platformStatus); err != nil {
 			log.Printf("slack/users_sync: update status %s: %v", u.ID, err)
 		}
