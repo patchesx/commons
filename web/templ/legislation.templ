@@ -1,0 +1,658 @@
+package admintempl
+
+import (
+	"strconv"
+
+	"commons/store"
+)
+
+type LegislationPageData struct {
+	Bills        []store.Bill
+	Bodies       []store.LegislativeBody
+	Tags         []store.Tag
+	FiltersMap   map[string][]store.ImportFilter
+	SubjectsMap  map[string][]string
+	BodyFilter   string
+	TrackedBills int
+}
+
+func billStatusColor(s string) string {
+	if s == "" {
+		return "gray"
+	}
+	return "blue"
+}
+
+func filterTypeForBody(dataSource string) string {
+	if dataSource == "openstates" {
+		return "subject"
+	}
+	return "matter_type"
+}
+
+func bodyLevelLabel(level string) string {
+	switch level {
+	case "state":
+		return "State"
+	case "local":
+		return "Local"
+	case "federal":
+		return "Federal"
+	default:
+		return level
+	}
+}
+
+templ LegislationPage(d LegislationPageData) {
+	@Layout("Legislation", "/admin/legislation") {
+		<div x-data="{ tab: 'bills' }">
+			<h1 class="title is-4 mb-1">Legislation</h1>
+			@PageHelp() {
+				Track bills and council matters. Subscribe members to receive Slack DMs when a bill's status changes. The platform syncs automatically once per day — or trigger a manual sync from the Bills tab.
+			}
+			<div class="tabs mb-4">
+				<ul>
+					<li :class="tab === 'bills' ? 'is-active' : ''">
+						<a x-on:click.prevent="tab = 'bills'" href="#">Bills ({ strconv.Itoa(d.TrackedBills) })</a>
+					</li>
+					<li :class="tab === 'bodies' ? 'is-active' : ''">
+						<a x-on:click.prevent="tab = 'bodies'" href="#">Bodies</a>
+					</li>
+					<li :class="tab === 'tags' ? 'is-active' : ''">
+						<a x-on:click.prevent="tab = 'tags'" href="#">Tags</a>
+					</li>
+				</ul>
+			</div>
+			<!-- Bills tab -->
+			<div x-show="tab === 'bills'">
+				<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+					<div class="is-flex is-align-items-center" style="gap: 0.5rem">
+						<label for="leg-body-filter" class="is-size-7 has-text-grey">Body:</label>
+						<div class="select is-small">
+							<select
+								id="leg-body-filter"
+								hx-get="/admin/fragments/legislation-bills"
+								hx-trigger="change"
+								hx-target="#legislation-bills"
+								hx-swap="outerHTML"
+								name="bodyId"
+							>
+								<option value="" selected?={ d.BodyFilter == "" }>All bodies</option>
+								for _, body := range d.Bodies {
+									<option value={ body.ID } selected?={ d.BodyFilter == body.ID }>{ body.Name }</option>
+								}
+							</select>
+						</div>
+					</div>
+					<div class="is-flex is-align-items-center" style="gap: 0.5rem">
+						<span id="leg-sync-status" role="status" aria-live="polite" class="is-size-7 has-text-grey"></span>
+						<span x-data="{ confirming: false }">
+							<button
+								x-show="!confirming"
+								x-on:click.stop="confirming = true"
+								class="button is-small"
+							>Sync now</button>
+							<span x-show="confirming" style="display:none" class="buttons are-small mb-0">
+								<button
+									x-on:click.stop
+									hx-post="/admin/fragments/legislation/sync"
+									hx-swap="none"
+									hx-on:htmx:after-request="confirming = false; if(event.detail.successful) { const s = document.getElementById('leg-sync-status'); if(s) { s.textContent = 'Sync started'; setTimeout(() => s.textContent = '', 4000) } }"
+									class="button is-small"
+								>Confirm sync</button>
+								<button x-on:click.stop="confirming = false" class="button is-small">Cancel</button>
+							</span>
+						</span>
+						<button
+							hx-get="/admin/fragments/legislation/add-bill-form"
+							hx-target="#legislation-modal"
+							hx-swap="innerHTML"
+							hx-on:htmx:after-request="document.getElementById('legislation-modal').showModal()"
+							class="button is-primary is-small"
+						>+ Add bill</button>
+					</div>
+				</div>
+				@LegislationBillsTable(d.Bills, d.BodyFilter)
+			</div>
+			<!-- Bodies tab -->
+			<div x-show="tab === 'bodies'" style="display:none">
+				<div class="is-flex is-justify-content-flex-end mb-3">
+					<button
+						hx-get="/admin/fragments/legislation/body-form"
+						hx-target="#legislation-modal"
+						hx-swap="innerHTML"
+						hx-on:htmx:after-request="document.getElementById('legislation-modal').showModal()"
+						class="button is-primary is-small"
+					>+ Add body</button>
+				</div>
+				if len(d.Bodies) == 0 {
+					@EmptyState("No legislative bodies configured.")
+				}
+				for _, body := range d.Bodies {
+					<div class="box mb-4">
+						<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+							<div>
+								<span class="has-text-weight-semibold">{ body.Name }</span>
+								<span class="is-size-7 has-text-grey ml-2">{ bodyLevelLabel(body.Level) } · { body.State } · { body.DataSource }</span>
+							</div>
+							<div class="is-flex is-align-items-center" style="gap: 0.5rem">
+								if body.Active {
+									@StatusBadge("active", "green")
+								} else {
+									@StatusBadge("inactive", "gray")
+								}
+								<button
+									hx-get={ "/admin/fragments/legislation/body-form?bodyId=" + body.ID }
+									hx-target="#legislation-modal"
+									hx-swap="innerHTML"
+									hx-on:htmx:after-request="document.getElementById('legislation-modal').showModal()"
+									class="button is-small is-outlined is-link"
+								>Edit</button>
+							</div>
+						</div>
+						if filters, ok := d.FiltersMap[body.ID]; ok && len(filters) > 0 {
+							<div class="mb-3">
+								<p class="is-size-7 has-text-weight-semibold has-text-grey mb-2">Import filters:</p>
+								<div class="tags">
+									for _, f := range filters {
+										<span class="tag is-info is-rounded">
+											{ f.FilterType }: { f.Value }
+											<span x-data="{ confirming: false }">
+												<button
+													x-show="!confirming"
+													x-on:click.stop="confirming = true"
+													aria-label={ "Remove filter " + f.Value }
+													class="delete is-small"
+												></button>
+												<span :class="{ 'is-flex': confirming, 'is-hidden': !confirming }" class="is-align-items-center ml-1" style="gap: 0.25rem">
+													<button
+														x-on:click.stop
+														hx-delete={ "/admin/fragments/legislation/filters/" + f.ID }
+														hx-swap="none"
+														hx-on:htmx:after-request="if(event.detail.successful && event.detail.requestConfig.verb === 'delete') location.reload()"
+														class="button is-danger is-small px-1"
+													>Remove</button>
+													<button
+														x-on:click.stop="confirming = false"
+														class="button is-small px-1"
+													>Cancel</button>
+												</span>
+											</span>
+										</span>
+									}
+								</div>
+							</div>
+						}
+						<form
+							hx-post={ "/admin/fragments/legislation/bodies/" + body.ID + "/filters" }
+							hx-swap="none"
+							hx-on:htmx:after-request="if(event.detail.successful && event.detail.requestConfig.verb === 'post') { this.reset(); location.reload() }"
+						>
+							<input type="hidden" name="filter_type" value={ filterTypeForBody(body.DataSource) }/>
+							<div class="field has-addons">
+								<div class="control is-expanded">
+									if body.DataSource == "openstates" {
+										<datalist id={ "subjects-" + body.ID }>
+											for _, s := range d.SubjectsMap[body.ID] {
+												<option value={ s }/>
+											}
+										</datalist>
+										<input
+											type="text"
+											name="value"
+											list={ "subjects-" + body.ID }
+											placeholder="e.g. HOUSING AND URBAN DEVELOPMENT"
+											required
+											class="input is-small"
+										/>
+									} else {
+										<div
+											id={ "matter-type-select-" + body.ID }
+											hx-get={ "/admin/fragments/legislation/bodies/" + body.ID + "/matter-types" }
+											hx-trigger="load"
+											hx-swap="outerHTML"
+										>
+											<input
+												type="text"
+												name="value"
+												placeholder="Loading matter types…"
+												disabled
+												class="input is-small"
+											/>
+										</div>
+									}
+								</div>
+								<div class="control">
+									<button type="submit" class="button is-primary is-small">Add filter</button>
+								</div>
+							</div>
+						</form>
+					</div>
+				}
+			</div>
+			<!-- Tags tab -->
+			<div x-show="tab === 'tags'" style="display:none">
+				<div class="box">
+					<h2 class="title is-6 mb-3">Tags</h2>
+					if len(d.Tags) == 0 {
+						@EmptyState("No tags yet.")
+					}
+					<div class="tags mb-4">
+						for _, tag := range d.Tags {
+							<span class="tag is-info is-rounded">
+								{ tag.Name }
+								<span x-data="{ confirming: false }">
+									<button
+										x-show="!confirming"
+										x-on:click.stop="confirming = true"
+										aria-label={ "Delete tag " + tag.Name }
+										class="delete is-small"
+									></button>
+									<span :class="{ 'is-flex': confirming, 'is-hidden': !confirming }" class="is-align-items-center ml-1" style="gap: 0.25rem">
+										<button
+											x-on:click.stop
+											hx-delete={ "/admin/fragments/legislation/tags/" + tag.ID }
+											hx-swap="none"
+											hx-on:htmx:after-request="if(event.detail.successful && event.detail.requestConfig.verb === 'delete') location.reload()"
+											class="button is-danger is-small px-1"
+										>Remove</button>
+										<button x-on:click.stop="confirming = false" class="button is-small px-1">Cancel</button>
+									</span>
+								</span>
+							</span>
+						}
+					</div>
+					<form
+						hx-post="/admin/fragments/legislation/tags"
+						hx-swap="none"
+						hx-on:htmx:after-request="if(event.detail.successful && event.detail.requestConfig.verb === 'post') { this.reset(); location.reload() }"
+					>
+						<div class="field has-addons">
+							<div class="control is-expanded">
+								<input type="text" name="name" placeholder="New tag name" required class="input is-small"/>
+							</div>
+							<div class="control">
+								<button type="submit" class="button is-primary is-small">Add tag</button>
+							</div>
+						</div>
+					</form>
+				</div>
+			</div>
+		</div>
+		<dialog id="legislation-modal" aria-labelledby="legislation-modal-title" style="width: 100%; max-width: 32rem; max-height: 90dvh; overflow-y: auto; padding: 0; border: none; border-radius: 0.5rem"></dialog>
+	}
+}
+
+templ LegislationBillsTable(bills []store.Bill, bodyFilter string) {
+	<div id="legislation-bills">
+		<div class="card">
+			<div class="table-container">
+				<table class="table is-fullwidth is-hoverable is-narrow mb-0">
+					<thead>
+						<tr>
+							<th>Bill</th>
+							<th class="is-hidden-mobile">Body</th>
+							<th class="is-hidden-mobile">Status</th>
+							<th class="is-hidden-mobile">Position</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(bills) == 0 {
+							<tr>
+								<td colspan="5" class="has-text-centered py-5">
+									@EmptyState("No bills being tracked.")
+								</td>
+							</tr>
+						}
+						for _, bill := range bills {
+							<tr>
+								<td>
+									<div class="has-text-weight-semibold">
+										if bill.Link != nil && *bill.Link != "" {
+											<a href={ templ.URL(*bill.Link) } target="_blank" class="has-text-link">{ bill.Identifier }</a>
+										} else {
+											{ bill.Identifier }
+										}
+									</div>
+									<div class="is-size-7 has-text-grey mt-1" style="max-width: 20rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{ bill.Title }</div>
+									if len(bill.Tags) > 0 {
+										<div class="tags mt-1" style="flex-wrap: wrap; gap: 0.25rem">
+											for _, tag := range bill.Tags {
+												<span class="tag is-info is-rounded is-size-7">{ tag }</span>
+											}
+										</div>
+									}
+									<div class="is-hidden-tablet is-size-7 has-text-grey mt-1">
+										{ bill.BodyName }
+										if bill.Status != nil {
+											· { *bill.Status }
+										}
+										if bill.ChapterPosition != nil {
+											· { *bill.ChapterPosition }
+										}
+									</div>
+								</td>
+								<td class="is-hidden-mobile is-size-7 has-text-grey">{ bill.BodyName }</td>
+								<td class="is-hidden-mobile">
+									if bill.Status != nil {
+										@StatusBadge(*bill.Status, billStatusColor(*bill.Status))
+									}
+								</td>
+								<td class="is-hidden-mobile is-size-7 has-text-grey">
+									if bill.ChapterPosition != nil {
+										{ *bill.ChapterPosition }
+									}
+								</td>
+								<td class="has-text-right" style="white-space: nowrap">
+									<div class="buttons are-small mb-0 is-justify-content-flex-end" style="gap: 0.25rem">
+										<button
+											hx-get={ "/admin/fragments/legislation/bill-form?billId=" + bill.ID }
+											hx-target="#legislation-modal"
+											hx-swap="innerHTML"
+											hx-on:htmx:after-request="document.getElementById('legislation-modal').showModal()"
+											class="button is-small is-outlined is-link"
+										>Edit</button>
+										<span x-data="{ confirming: false }">
+											<button
+												x-show="!confirming"
+												x-on:click.stop="confirming = true"
+												class="button is-small is-outlined is-danger"
+											>Dismiss</button>
+											<span x-show="confirming" style="display:none" class="buttons are-small mb-0">
+												<button
+													x-on:click.stop
+													hx-delete={ "/admin/fragments/legislation/bills/" + bill.ID }
+													hx-swap="none"
+													hx-on:htmx:after-request="if(event.detail.successful) htmx.ajax('GET', '/admin/fragments/legislation-bills', {target: '#legislation-bills', swap: 'outerHTML'})"
+													class="button is-small is-danger"
+												>Confirm</button>
+												<button x-on:click.stop="confirming = false" class="button is-small">Cancel</button>
+											</span>
+										</span>
+									</div>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+}
+
+templ AddBillFormModal(bodies []store.LegislativeBody, errMsg string) {
+	<div class="box">
+		<h2 id="legislation-modal-title" class="title is-5 mb-4">Add Bill</h2>
+		<form
+			hx-post="/admin/fragments/legislation/bills"
+			hx-target="#legislation-modal"
+			hx-swap="innerHTML"
+		>
+			@AlertBox(errMsg, "error")
+			<div class="field">
+				<label for="bill-body" class="label is-small">Legislative body <span class="has-text-danger">*</span></label>
+				<div class="control">
+					<div class="select is-small is-fullwidth">
+						<select id="bill-body" name="body_id" required>
+							<option value="">— select body —</option>
+							for _, body := range bodies {
+								<option value={ body.ID }>{ body.Name }</option>
+							}
+						</select>
+					</div>
+				</div>
+			</div>
+			<div class="field">
+				<label for="bill-identifier" class="label is-small">Identifier <span class="has-text-danger">*</span></label>
+				<div class="control">
+					<input id="bill-identifier" type="text" name="identifier" required placeholder="e.g. HB 1234" class="input is-small"/>
+				</div>
+			</div>
+			<div class="field">
+				<label for="bill-title" class="label is-small">Title <span class="has-text-danger">*</span></label>
+				<div class="control">
+					<input id="bill-title" type="text" name="title" required class="input is-small"/>
+				</div>
+			</div>
+			<div class="field">
+				<label for="bill-position" class="label is-small">Chapter position</label>
+				<div class="control">
+					<input id="bill-position" type="text" name="chapter_position" placeholder="e.g. support" class="input is-small"/>
+				</div>
+			</div>
+			<div class="field">
+				<label for="bill-link" class="label is-small">Link</label>
+				<div class="control">
+					<input id="bill-link" type="url" name="link" placeholder="https://..." class="input is-small"/>
+				</div>
+			</div>
+			<div class="field">
+				<label for="bill-notes" class="label is-small">Notes</label>
+				<div class="control">
+					<textarea id="bill-notes" name="notes" rows="2" class="textarea is-small"></textarea>
+				</div>
+			</div>
+			<div class="field is-grouped is-grouped-right">
+				<div class="control">
+					<button type="button" onclick="document.getElementById('legislation-modal').close()" class="button is-small">Cancel</button>
+				</div>
+				<div class="control">
+					<button type="submit" class="button is-primary is-small">Add</button>
+				</div>
+			</div>
+		</form>
+	</div>
+}
+
+templ EditBillFormModal(bill store.Bill, tags []store.Tag, billTags []string, errMsg string) {
+	<div class="box">
+		<h2 id="legislation-modal-title" class="title is-5 mb-1">Edit Bill</h2>
+		<p class="is-size-7 has-text-grey mb-4">{ bill.BodyName }</p>
+		<form
+			hx-put={ "/admin/fragments/legislation/bills/" + bill.ID }
+			hx-target="#legislation-modal"
+			hx-swap="innerHTML"
+		>
+			@AlertBox(errMsg, "error")
+			<div class="field">
+				<label for="edit-bill-identifier" class="label is-small">Identifier</label>
+				<div class="control">
+					<input id="edit-bill-identifier" type="text" name="identifier" value={ bill.Identifier } required class="input is-small"/>
+				</div>
+			</div>
+			<div class="field">
+				<label for="edit-bill-title" class="label is-small">Title</label>
+				<div class="control">
+					<input id="edit-bill-title" type="text" name="title" value={ bill.Title } required class="input is-small"/>
+				</div>
+			</div>
+			<div class="field">
+				<label for="edit-bill-position" class="label is-small">Chapter position</label>
+				<div class="control">
+					<input
+						id="edit-bill-position"
+						type="text"
+						name="chapter_position"
+						value={ func() string {
+							if bill.ChapterPosition != nil {
+								return *bill.ChapterPosition
+							}
+							return ""
+						}() }
+						class="input is-small"
+					/>
+				</div>
+			</div>
+			<div class="field">
+				<label for="edit-bill-link" class="label is-small">Link</label>
+				<div class="control">
+					<input
+						id="edit-bill-link"
+						type="url"
+						name="link"
+						value={ func() string {
+							if bill.Link != nil {
+								return *bill.Link
+							}
+							return ""
+						}() }
+						class="input is-small"
+					/>
+				</div>
+			</div>
+			<div class="field">
+				<label for="edit-bill-notes" class="label is-small">Notes</label>
+				<div class="control">
+					<textarea id="edit-bill-notes" name="notes" rows="2" class="textarea is-small">
+						if bill.Notes != nil {
+							{ *bill.Notes }
+						}
+					</textarea>
+				</div>
+			</div>
+			if len(tags) > 0 {
+				<fieldset class="field">
+					<legend class="label is-small">Tags</legend>
+					<div class="is-flex is-flex-wrap-wrap" style="gap: 0.5rem">
+						for _, tag := range tags {
+							<label class="is-flex is-align-items-center is-size-7" style="gap: 0.375rem; cursor: pointer">
+								<input
+									type="checkbox"
+									name="tags[]"
+									value={ tag.ID }
+									checked?={ func() bool {
+										for _, bt := range billTags {
+											if bt == tag.ID {
+												return true
+											}
+										}
+										return false
+									}() }
+								/>
+								{ tag.Name }
+							</label>
+						}
+					</div>
+				</fieldset>
+			}
+			<div class="field is-grouped is-grouped-right">
+				<div class="control">
+					<button type="button" onclick="document.getElementById('legislation-modal').close()" class="button is-small">Cancel</button>
+				</div>
+				<div class="control">
+					<button type="submit" class="button is-primary is-small">Save</button>
+				</div>
+			</div>
+		</form>
+	</div>
+}
+
+templ BodyFormModal(body *store.LegislativeBody, errMsg string) {
+	<div class="box">
+		if body == nil {
+			<h2 id="legislation-modal-title" class="title is-5 mb-4">Add Legislative Body</h2>
+		} else {
+			<h2 id="legislation-modal-title" class="title is-5 mb-4">Edit Body</h2>
+		}
+		<form
+			if body == nil {
+				hx-post="/admin/fragments/legislation/bodies"
+			} else {
+				hx-put={ "/admin/fragments/legislation/bodies/" + body.ID }
+			}
+			hx-target="#legislation-modal"
+			hx-swap="innerHTML"
+		>
+			@AlertBox(errMsg, "error")
+			<div class="field">
+				<label for="body-name" class="label is-small">Name <span class="has-text-danger">*</span></label>
+				<div class="control">
+					<input
+						id="body-name"
+						type="text"
+						name="name"
+						value={ func() string {
+							if body != nil {
+								return body.Name
+							}
+							return ""
+						}() }
+						required
+						class="input is-small"
+					/>
+				</div>
+			</div>
+			<div class="columns">
+				<div class="column">
+					<div class="field">
+						<label for="body-level" class="label is-small">Level</label>
+						<div class="control">
+							<div class="select is-small is-fullwidth">
+								<select id="body-level" name="level">
+									<option value="state" selected?={ body != nil && body.Level == "state" }>State</option>
+									<option value="local" selected?={ body != nil && body.Level == "local" }>Local</option>
+									<option value="federal" selected?={ body != nil && body.Level == "federal" }>Federal</option>
+								</select>
+							</div>
+						</div>
+					</div>
+				</div>
+				<div class="column">
+					<div class="field">
+						<label for="body-state" class="label is-small">State</label>
+						<div class="control">
+							<input
+								id="body-state"
+								type="text"
+								name="state"
+								value={ func() string {
+									if body != nil {
+										return body.State
+									}
+									return ""
+								}() }
+								placeholder="e.g. CA"
+								maxlength="2"
+								class="input is-small"
+							/>
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="field">
+				<label for="body-source" class="label is-small">Data source</label>
+				<div class="control">
+					<div class="select is-small is-fullwidth">
+						<select id="body-source" name="data_source">
+							<option value="manual" selected?={ body == nil || body.DataSource == "manual" }>Manual</option>
+							<option value="openstates" selected?={ body != nil && body.DataSource == "openstates" }>OpenStates</option>
+							<option value="legistar" selected?={ body != nil && body.DataSource == "legistar" }>Legistar</option>
+						</select>
+					</div>
+				</div>
+			</div>
+			if body != nil {
+				<div class="field">
+					<label class="is-flex is-align-items-center is-size-6" style="gap: 0.5rem; cursor: pointer">
+						<input
+							type="checkbox"
+							name="active"
+							value="true"
+							checked?={ body.Active }
+						/>
+						Active (sync this body)
+					</label>
+				</div>
+			}
+			<div class="field is-grouped is-grouped-right">
+				<div class="control">
+					<button type="button" onclick="document.getElementById('legislation-modal').close()" class="button is-small">Cancel</button>
+				</div>
+				<div class="control">
+					<button type="submit" class="button is-primary is-small">Save</button>
+				</div>
+			</div>
+		</form>
+	</div>
+}

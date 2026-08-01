@@ -1,0 +1,112 @@
+/* DM Sans — self-hosted */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/admin/assets/fonts/dm-sans-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/admin/assets/fonts/dm-sans-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/admin/assets/fonts/dm-sans-italic-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/admin/assets/fonts/dm-sans-italic-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  --bulma-family-primary: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+
+  /* Sidebar defaults — overridden at runtime by HexToSidebarCSS when colors are configured */
+  --brand-sidebar-bg:     #111827;
+  --brand-sidebar-text:   #ffffff;
+  --brand-sidebar-muted:  rgba(255, 255, 255, 0.6);
+  --brand-sidebar-hover:  #1f2937;
+  --brand-sidebar-active: #374151;
+  --brand-sidebar-border: #374151;
+
+}
+
+/* Hide elements with x-cloak until Alpine initializes */
+[x-cloak] { display: none !important; }
+
+/* Restore native dialog centering */
+dialog { margin: auto; }
+
+/* Sidebar toggle always visible — Bulma hides .navbar-burger at desktop breakpoint */
+.navbar-burger {
+  display: flex;
+}
+
+/* Slack message composer */
+.slack-mention {
+  background: rgba(18, 100, 163, 0.1);
+  color: #1264a3;
+  border-radius: 3px;
+  padding: 0 3px;
+  font-weight: 500;
+}
+[data-theme="dark"] .slack-mention {
+  background: rgba(29, 155, 209, 0.2);
+  color: #5bc0f8;
+}
+.slack-code {
+  background: rgba(0,0,0,0.06);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 0.9em;
+}
+[data-theme="dark"] .slack-code {
+  background: rgba(255,255,255,0.1);
+}
+.slack-preview {
+  border: 1px solid hsl(var(--bulma-border-h), var(--bulma-border-s), var(--bulma-border-l));
+  border-radius: var(--bulma-radius-small);
+  padding: 0.625em 0.75em;
+  min-height: 6.5em;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  background-color: var(--bulma-input-background-color);
+  color: var(--bulma-text);
+}
+
+/* Theme-aware inset surface — replaces Bulma's fixed has-background-light
+   (which is hardcoded light gray and never adapts to dark mode).
+   Light: 96% lightness — byte-identical to has-background-light.
+   Dark: 13% lightness — subtle dark panel. */
+.panel-surface {
+  background-color: hsl(var(--bulma-scheme-h), var(--bulma-scheme-s), var(--bulma-scheme-main-ter-l));
+}
+
+/* Sidebar nav — shared by admin and portal layouts */
+.sidebar-mobile-bar .menu-list a:not(.is-active):hover {
+  background-color: var(--brand-sidebar-hover);
+}
+.sidebar-mobile-bar .menu-list a.is-active {
+  background-color: var(--brand-sidebar-active);
+  color: #fff;
+}
+.sidebar-mobile-bar {
+  background-color: var(--brand-sidebar-bg);
+  color: var(--brand-sidebar-text);
+}
+
+

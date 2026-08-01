@@ -1,0 +1,278 @@
+package admintempl
+
+import "strconv"
+
+// insertVariantVar inserts {{key}} into the focused message-variant textarea, or
+// falls back to the last textarea whose name starts with the given prefix.
+script insertVariantVar(prefix string, key string) {
+	var el = document.querySelector('[name^="' + prefix + '"]:focus')
+	if (!el) {
+		var els = document.querySelectorAll('[name^="' + prefix + '"]')
+		if (els.length > 0) el = els[els.length - 1]
+	}
+	if (el) {
+		var v = '{{' + key + '}}'
+		if (el.setRangeText) {
+			el.setRangeText(v, el.selectionStart || 0, el.selectionEnd || 0, 'end')
+		} else {
+			el.value += v
+		}
+		el.dispatchEvent(new Event('input'))
+		el.focus()
+	}
+}
+
+// insertPipelineVar inserts {{key}} at the cursor position in the target field.
+script insertPipelineVar(fieldID string, key string) {
+	var el = document.getElementById(fieldID)
+	if (el) {
+		var v = '{{' + key + '}}'
+		if (el.setRangeText) {
+			el.setRangeText(v, el.selectionStart || 0, el.selectionEnd || 0, 'end')
+		} else {
+			el.value += v
+		}
+		el.dispatchEvent(new Event('input'))
+		el.focus()
+	}
+}
+
+// Card renders a white box with uniform padding and a header.
+templ Card(title string, action templ.Component) {
+	<div class="box">
+		<div class="is-flex is-justify-content-space-between is-align-items-center mb-4">
+			<h2 class="title is-6 mb-0">{ title }</h2>
+			if action != nil {
+				@action
+			}
+		</div>
+		{ children... }
+	</div>
+}
+
+// SectionedCard renders a card with a bordered header and edge-to-edge content.
+templ SectionedCard(title string, action templ.Component) {
+	<div class="card">
+		<header class="card-header">
+			<p class="card-header-title">{ title }</p>
+			if action != nil {
+				<div class="card-header-icon">
+					@action
+				</div>
+			}
+		</header>
+		{ children... }
+	</div>
+}
+
+// StatusBadge renders a small rounded pill badge.
+// color: "green", "yellow", "amber", "red", "blue", "gray" (default).
+templ StatusBadge(label, color string) {
+	<span class={ statusBadgeClass(color) }>{ label }</span>
+}
+
+func statusBadgeClass(color string) string {
+	switch color {
+	case "green":
+		return "tag is-success is-rounded"
+	case "yellow":
+		return "tag is-warning is-rounded"
+	case "amber":
+		return "tag is-warning is-rounded"
+	case "red":
+		return "tag is-danger is-rounded"
+	case "blue":
+		return "tag is-info is-rounded"
+	default:
+		return "tag is-rounded"
+	}
+}
+
+// EmptyState renders a simple italic placeholder message for empty lists.
+templ EmptyState(message string) {
+	<p class="has-text-grey is-italic is-size-7">{ message }</p>
+}
+
+// AlertBox renders a static inline error/warning/success message.
+// severity: "error" (default), "warning", "success". Renders nothing when message is empty.
+templ AlertBox(message, severity string) {
+	if message != "" {
+		<p role="alert" class={ alertBoxClass(severity) }>{ message }</p>
+	}
+}
+
+func alertBoxClass(severity string) string {
+	switch severity {
+	case "success":
+		return "help is-success"
+	case "warning":
+		return "help is-warning"
+	default:
+		return "help is-danger"
+	}
+}
+
+// PaginationNav renders prev/next pagination controls.
+templ PaginationNav(page, totalPages int, prevURL, nextURL, swapTargetID string) {
+	<div class="is-flex is-justify-content-space-between is-align-items-center px-4 py-3" style="border-top: 1px solid var(--bulma-border)">
+		<div>{ children... }</div>
+		<div class="buttons are-small mb-0">
+			if page > 1 {
+				<button
+					hx-get={ prevURL }
+					hx-target={ "#" + swapTargetID }
+					hx-swap="outerHTML"
+					class="button is-small"
+				>← Prev</button>
+			}
+			<button class="button is-small is-static">Page { strconv.Itoa(page) } of { strconv.Itoa(totalPages) }</button>
+			if page < totalPages {
+				<button
+					hx-get={ nextURL }
+					hx-target={ "#" + swapTargetID }
+					hx-swap="outerHTML"
+					class="button is-small"
+				>Next →</button>
+			}
+		</div>
+	</div>
+}
+
+// ConfirmDeleteButton renders an inline confirm-before-delete button pair.
+templ ConfirmDeleteButton(deleteClickExpr string) {
+	<span x-data="{ confirming: false }">
+		<button
+			x-show="!confirming"
+			x-on:click.stop="confirming = true"
+			class="button is-danger is-outlined is-small"
+		>Delete</button>
+		<span x-show="confirming" style="display:none" class="buttons are-small mb-0">
+			<button
+				x-on:click.stop={ deleteClickExpr }
+				class="button is-danger is-small"
+			>Confirm</button>
+			<button
+				x-on:click.stop="confirming = false"
+				class="button is-small"
+			>Cancel</button>
+		</span>
+	</span>
+}
+
+// PageHelp renders a collapsible help panel.
+templ PageHelp() {
+	<div x-data="{ open: false }" class="mb-5">
+		<button
+			x-on:click="open = !open"
+			:aria-expanded="open"
+			class="button is-ghost is-small has-text-grey px-0"
+		>
+			<span x-show="!open">About this page ▼</span>
+			<span x-show="open" x-cloak>About this page ▲</span>
+		</button>
+		<div x-show="open" x-cloak class="notification is-size-7 mt-2">
+			{ children... }
+		</div>
+	</div>
+}
+
+// ToggleButton renders a boolean toggle as a small rounded button.
+// Bulma has no toggle switch component; Alpine drives the color state.
+templ ToggleButton(pressedExpr, onClickExpr, ariaLabel string) {
+	<button
+		:aria-pressed={ pressedExpr }
+		aria-label={ ariaLabel }
+		x-on:click={ onClickExpr }
+		:class={ pressedExpr + " ? 'is-success' : ''" }
+		class="button is-small is-rounded"
+		x-text={ pressedExpr + " ? 'On' : 'Off'" }
+	></button>
+}
+
+templ textConfigRow(service string, e ConfigEntryView, revealed bool) {
+	<div style="border-bottom: 1px solid var(--bulma-border)" x-data={ credRowData(e) }>
+		<div class="columns mb-0 is-align-items-center" style="margin: 0">
+			<div class="column is-narrow py-4" style="min-width: 13rem; overflow-wrap: break-word; word-break: break-word">
+				<div class="has-text-weight-semibold is-size-7">{ e.Label }</div>
+				<div class="is-family-monospace is-size-7 has-text-grey">{ e.Key }</div>
+				if e.Description != "" {
+					<div class="is-size-7 has-text-grey-light mt-1">{ e.Description }</div>
+				}
+			</div>
+			<div class="column py-4">
+				<div x-show="!editing">
+					<span x-show="configured" class="is-family-monospace is-size-7" x-text="display"></span>
+					<span x-show="!configured" class="is-size-7 has-text-grey is-italic">Not configured</span>
+				</div>
+				<div x-show="editing" style="display:none">
+					<span x-show="errMsg" x-text="errMsg" role="alert" class="help is-danger"></span>
+					if e.InputType == "textarea" {
+						<div class="field">
+							<div class="control">
+								<textarea
+									x-model="val"
+									placeholder={ configInputPlaceholder(e) }
+									rows="4"
+									class="textarea is-small"
+									autofocus
+								></textarea>
+							</div>
+						</div>
+						<div class="buttons are-small">
+							<button x-on:click={ `save('` + service + `', '` + e.Key + `')` } class="button is-primary is-small">Save</button>
+							<button x-on:click="editing = false" class="button is-small">Cancel</button>
+						</div>
+					} else {
+						<div class="field has-addons">
+							if e.InputType == "channel" {
+								@channelEditInput(service, e)
+							} else if e.InputType == "timezone" {
+								<div class="control is-expanded">
+									<input
+										type="text"
+										list="tz-options"
+										x-model="val"
+										placeholder="Enter timezone…"
+										class="input is-small is-family-monospace"
+										autofocus
+									/>
+									<datalist id="tz-options">
+										for _, tz := range timezoneList() {
+											<option value={ tz }></option>
+										}
+									</datalist>
+								</div>
+							} else {
+								<div class="control is-expanded">
+									<input
+										type="text"
+										x-model="val"
+										placeholder={ configInputPlaceholder(e) }
+										class="input is-small is-family-monospace"
+										autofocus
+									/>
+								</div>
+							}
+							<div class="control">
+								<button x-on:click={ `save('` + service + `', '` + e.Key + `')` } class="button is-primary is-small">Save</button>
+							</div>
+							<div class="control">
+								<button x-on:click="editing = false" class="button is-small">Cancel</button>
+							</div>
+						</div>
+					}
+				</div>
+			</div>
+			<div class="column is-narrow py-4">
+				if e.InputType != "readonly" {
+					<button
+						x-show="!editing"
+						x-on:click={ editClickHandler(e) }
+						class="button is-primary is-outlined is-small"
+						x-text="configured ? 'Edit' : 'Set'"
+					></button>
+				}
+			</div>
+		</div>
+	</div>
+}

@@ -1,0 +1,34 @@
+# Secrets — never commit
+.env
+*.env
+
+# Build output
+commons
+tmp/
+
+# Operator scripts (contain real server addresses / secrets — don't commit).
+# New .sh files are tracked by default; add specific entries here only if a
+# script carries deployment-specific values.
+deployscript.sh
+deployscript_local.sh
+tracklogs.sh
+dbconnect.sh
+# testwebhook.sh is retired — kept ignored so a stale local copy can't be committed.
+testwebhook.sh
+
+# Air live reload config
+.air.toml
+
+# Claude Code local settings
+# .claude/
+
+# macOS
+.DS_Store
+
+# dummy
+dummy
+restoreinstructions.md
+ai/*
+.claude/settings.local.json
+adminapp.exe
+.worktrees/

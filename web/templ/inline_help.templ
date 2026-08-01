@@ -1,0 +1,26 @@
+package admintempl
+
+// InlineHelp is a one-line Bulma help message for HTMX form-feedback targets
+// (e.g. #import-result). Like FragmentError, it is returned with HTTP 200 so
+// HTMX swaps it into the target. kind is a Bulma color modifier: "success",
+// "warning", or "danger".
+templ InlineHelp(kind, msg string) {
+	<p class={ "help", "is-" + kind }>{ msg }</p>
+}
+
+// ResetLinkGenerated renders a password-reset link in a click-to-select input.
+templ ResetLinkGenerated(link string) {
+	<div>
+		<p class="help is-success mb-1">Reset link generated (valid 24h):</p>
+		<input type="text" value={ link } readonly onclick="this.select()" class="input is-small is-family-monospace"/>
+	</div>
+}
+
+// ChannelAssignmentsSaved confirms the channel-approver modal save.
+templ ChannelAssignmentsSaved() {
+	<div class="p-5">
+		Channel assignments saved.
+		<br/>
+		<button type="button" onclick="document.getElementById('users-modal').close()" class="button is-small mt-4">Close</button>
+	</div>
+}

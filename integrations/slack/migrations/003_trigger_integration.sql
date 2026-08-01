@@ -1,0 +1,11 @@
+-- Replaces 007_migrate_event_handlers.sql.
+-- The legacy 007 migration copied data from slack.event_handlers into trigger_sources
+-- and pipeline_actions, and copied slack.event_fires into trigger_fires.
+-- On fresh installs, those source tables are empty, so no seed data is required.
+--
+-- Slack trigger types (team_join, app_home_opened, message) are registered in code
+-- via plugin.RegisterTriggerType(). trigger_sources rows for these types are created
+-- dynamically through the admin pipeline UI when users configure event handlers.
+--
+-- The old slack.event_handlers and slack.event_fires tables remain as archive
+-- for historical data. They are not referenced by the active pipeline system.

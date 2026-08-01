@@ -1,0 +1,792 @@
+package admintempl
+
+import (
+	"fmt"
+	"strings"
+
+	"commons/plugin"
+	"commons/store"
+)
+
+// --- Types ---
+
+type TriggersPageData struct {
+	Webhooks           []store.Webhook
+	EventGroups        []EventTriggerGroup
+	EventCount         int
+	ActionTypes        []plugin.ActionTypeInfo
+	ProcessorTypes     []plugin.ProcessorInfo
+	Channels           []WHChannel
+	Users              []WHUser
+	StorageLocations   []store.StorageLocation
+	ResourceCategories []string
+	PluginEnabled      map[string]bool
+	PluginLabels       map[string]string
+}
+
+type EventTriggerGroup struct {
+	TriggerType plugin.TriggerType
+	Pipelines   []EventPipeline
+}
+
+type EventPipeline struct {
+	Source  store.TriggerSource
+	Actions []store.WebhookAction
+}
+
+type TriggerDetailData struct {
+	IsHTTP      bool
+	Webhook     *store.Webhook
+	Source      store.TriggerSource
+	TriggerType plugin.TriggerType
+	Actions     []store.WebhookAction
+
+	ActionTypes        []plugin.ActionTypeInfo
+	ProcessorTypes     []plugin.ProcessorInfo
+	Channels           []WHChannel
+	Users              []WHUser
+	StorageLocations   []store.StorageLocation
+	ResourceCategories []string
+	PluginEnabled      map[string]bool
+	PluginLabels       map[string]string
+}
+
+// --- List page ---
+templ TriggersPage(data TriggersPageData) {
+	@Layout("Triggers", "/admin/triggers") {
+		<h1 class="title is-4 mb-3">Triggers</h1>
+		<div x-data={ fmt.Sprintf(`{ tab: 'webhooks' }`) }>
+			<div class="tabs mb-4">
+				<ul>
+					<li :class="tab === 'webhooks' ? 'is-active' : ''">
+						<a href="#" x-on:click.prevent="tab = 'webhooks'">Webhooks</a>
+					</li>
+					if data.EventCount > 0 {
+						<li :class="tab === 'events' ? 'is-active' : ''">
+							<a href="#" x-on:click.prevent="tab = 'events'">Events</a>
+						</li>
+					}
+				</ul>
+			</div>
+			<div x-show="tab === 'webhooks'">
+				<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+					<h2 class="title is-6 mb-0">HTTP Webhooks</h2>
+					<button
+						hx-get="/admin/fragments/triggers/webhook-form"
+						hx-target="#trigger-modal"
+						hx-on:htmx:after-request="document.getElementById('trigger-modal').showModal()"
+						class="button is-primary is-small"
+					>New webhook</button>
+				</div>
+				if len(data.Webhooks) == 0 {
+					@EmptyState("No webhooks configured yet.")
+				} else {
+					for _, wh := range data.Webhooks {
+						@triggerWebhookCard(wh, &data)
+					}
+				}
+			</div>
+			if len(data.EventGroups) > 0 {
+				<div x-show="tab === 'events'">
+					<h2 class="title is-6 mb-3">Event Triggers</h2>
+					for _, group := range data.EventGroups {
+						@triggerEventSection(group, &data)
+					}
+				</div>
+			}
+		</div>
+		<dialog id="trigger-modal" aria-labelledby="trigger-dialog-title" style="width: 100%; max-width: 32rem; max-height: 90dvh; overflow-y: auto; padding: 0; border: none; border-radius: 0.5rem"></dialog>
+	}
+}
+
+templ triggerWebhookCard(wh store.Webhook, data *TriggersPageData) {
+	<div class="box mb-4">
+		<div class="is-flex is-justify-content-space-between is-align-items-flex-start" style="gap: 0.75rem">
+			<div style="flex: 1; min-width: 0">
+				<div class="is-flex is-align-items-center is-flex-wrap-wrap mb-1" style="gap: 0.5rem">
+					<span class="has-text-weight-semibold">{ wh.Name }</span>
+					if wh.Enabled {
+						@StatusBadge("Enabled", "green")
+					} else {
+						@StatusBadge("Disabled", "gray")
+					}
+					if wh.ManagedBy != nil && *wh.ManagedBy != "" {
+						@StatusBadge("Managed by "+whManagedLabel(wh, data.PluginLabels), "blue")
+					}
+				</div>
+				<p class="is-family-monospace is-size-7 has-text-grey mb-1">/webhook/{ wh.Slug }</p>
+				<div class="is-flex is-align-items-center is-size-7 has-text-grey" style="gap: 0.75rem">
+					<span>
+						if len(wh.Filters) == 1 {
+							{ fmt.Sprintf("%d filter", len(wh.Filters)) }
+						} else {
+							{ fmt.Sprintf("%d filters", len(wh.Filters)) }
+						}
+					</span>
+					<span>·</span>
+					<span>
+						if whSuccessActionCount(wh.Actions) == 1 {
+							{ fmt.Sprintf("%d action", whSuccessActionCount(wh.Actions)) }
+						} else {
+							{ fmt.Sprintf("%d actions", whSuccessActionCount(wh.Actions)) }
+						}
+					</span>
+				</div>
+			</div>
+			<div class="is-flex is-align-items-center" style="gap: 0.5rem; flex-shrink: 0">
+				<a href={ templ.SafeURL("/admin/triggers/" + wh.ID) } class="button is-small">Manage</a>
+				if wh.ManagedBy == nil || *wh.ManagedBy == "" {
+					@ConfirmDeleteButton(fmt.Sprintf("htmx.ajax('DELETE', '/admin/fragments/triggers/%s', {swap: 'none'}).then(() => location.reload())", wh.ID))
+				} else if !data.PluginEnabled[*wh.ManagedBy] {
+					<span x-data="{ confirming: false }">
+						<button
+							x-show="!confirming"
+							x-on:click.stop="confirming = true"
+							class="button is-danger is-outlined is-small"
+						>Delete</button>
+						<div x-show="confirming" style="display:none">
+							<p class="is-size-7 has-text-warning-dark mb-1">
+								{ "This webhook is managed by the " + whManagedLabel(wh, data.PluginLabels) + " plugin." }
+							</p>
+							<div class="buttons are-small mb-0">
+								<button
+									x-on:click.stop
+									hx-delete={ "/admin/fragments/triggers/" + wh.ID }
+									hx-swap="none"
+									hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
+									class="button is-danger is-small"
+								>Confirm delete</button>
+								<button x-on:click.stop="confirming = false" class="button is-small">Cancel</button>
+							</div>
+						</div>
+					</span>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+templ triggerEventSection(group EventTriggerGroup, data *TriggersPageData) {
+	<div class="mb-5" id={ "trigger-section-" + triggerSectionID(group.TriggerType.ID()) }>
+		<div class="is-flex is-justify-content-space-between is-align-items-baseline mb-2">
+			<h3 class="title is-6 mb-0">{ group.TriggerType.Label() }</h3>
+			<button
+				class="button is-small"
+				hx-post={ "/admin/fragments/triggers/event-pipeline?type=" + group.TriggerType.ID() }
+				hx-target={ "#trigger-section-" + triggerSectionID(group.TriggerType.ID()) }
+				hx-swap="outerHTML"
+				hx-vals={ `{"name":"New pipeline"}` }
+			>+ Add pipeline</button>
+		</div>
+		if len(group.Pipelines) == 0 {
+			@EmptyState("No pipelines configured for this trigger.")
+		} else {
+			for _, p := range group.Pipelines {
+				@triggerEventPipelineCard(p, group.TriggerType, data)
+			}
+		}
+	</div>
+}
+
+templ triggerEventPipelineCard(p EventPipeline, tt plugin.TriggerType, data *TriggersPageData) {
+	<div class="box mb-4">
+		<div class="is-flex is-justify-content-space-between is-align-items-flex-start" style="gap: 0.75rem">
+			<div style="flex: 1; min-width: 0">
+				<div class="is-flex is-align-items-center is-flex-wrap-wrap mb-1" style="gap: 0.5rem">
+					<span class="has-text-weight-semibold">{ p.Source.Name }</span>
+					if p.Source.Enabled {
+						@StatusBadge("Enabled", "green")
+					} else {
+						@StatusBadge("Disabled", "gray")
+					}
+				</div>
+				<p class="is-size-7 has-text-grey mb-1">{ tt.Label() }</p>
+				<div class="is-flex is-align-items-center is-size-7 has-text-grey" style="gap: 0.75rem">
+					<span>
+						if len(p.Actions) == 1 {
+							{ fmt.Sprintf("%d action", len(p.Actions)) }
+						} else {
+							{ fmt.Sprintf("%d actions", len(p.Actions)) }
+						}
+					</span>
+				</div>
+			</div>
+			<div class="is-flex is-align-items-center" style="gap: 0.5rem; flex-shrink: 0">
+				<a href={ templ.SafeURL("/admin/triggers/" + p.Source.ID) } class="button is-small">Manage</a>
+				@ConfirmDeleteButton(fmt.Sprintf("htmx.ajax('DELETE', '/admin/fragments/triggers/%s', {swap: 'none'}).then(() => location.reload())", p.Source.ID))
+			</div>
+		</div>
+	</div>
+}
+
+// --- Detail page ---
+templ TriggerDetailPage(data TriggerDetailData) {
+	if data.IsHTTP {
+		@webhookTriggerDetail(data)
+	} else {
+		@eventTriggerDetail(data)
+	}
+}
+
+templ webhookTriggerDetail(data TriggerDetailData) {
+	@Layout(data.Webhook.Name, "/admin/triggers") {
+		<div class="mb-3">
+			<a href="/admin/triggers" class="has-text-link is-size-7">← Triggers</a>
+		</div>
+		<div class="box mb-5">
+			<div class="is-flex is-justify-content-space-between is-align-items-flex-start" style="gap: 0.75rem">
+				<div style="flex: 1; min-width: 0">
+					<div class="is-flex is-align-items-center is-flex-wrap-wrap mb-1" style="gap: 0.5rem">
+						<h1 class="title is-4 mb-0">{ data.Webhook.Name }</h1>
+						if data.Webhook.Enabled {
+							@StatusBadge("Enabled", "green")
+						} else {
+							@StatusBadge("Disabled", "gray")
+						}
+						if data.Webhook.ManagedBy != nil && *data.Webhook.ManagedBy != "" {
+							@StatusBadge("Managed by "+whManagedLabel(*data.Webhook, data.PluginLabels), "blue")
+						}
+					</div>
+					<p class="is-family-monospace is-size-7 has-text-grey">/webhook/{ data.Webhook.Slug }</p>
+					if data.Webhook.Description != "" {
+						<p class="is-size-7 has-text-grey mt-1">{ data.Webhook.Description }</p>
+					}
+				</div>
+				<button
+					hx-get={ "/admin/fragments/triggers/" + data.Webhook.ID + "/webhook-form" }
+					hx-target="#trigger-modal"
+					hx-on:htmx:after-request="document.getElementById('trigger-modal').showModal()"
+					class="button is-small"
+				>Edit</button>
+			</div>
+		</div>
+		<div class="card mb-4">
+			@triggerFiltersSection(*data.Webhook, data.ProcessorTypes)
+		</div>
+		<div class="card mb-4">
+			@triggerActionPathSection(*data.Webhook, "success", "Actions", "Runs when all filters pass", data.ActionTypes, data.Channels, data.Users)
+		</div>
+		<div class="card mb-4">
+			@triggerActionPathSection(*data.Webhook, "filter_fail", "On filter fail", "Runs when a filter condition is not met", data.ActionTypes, data.Channels, data.Users)
+		</div>
+		<div class="card mb-4">
+			@triggerActionPathSection(*data.Webhook, "action_fail", "On action fail", "Runs when a success action errors — {{error_message}} and {{failed_action_type}} are available in templates", data.ActionTypes, data.Channels, data.Users)
+		</div>
+		<dialog id="trigger-modal" aria-labelledby="trigger-dialog-title" style="width: 100%; max-width: 32rem; max-height: 90dvh; overflow-y: auto; padding: 0; border: none; border-radius: 0.5rem"></dialog>
+	}
+}
+
+templ eventTriggerDetail(data TriggerDetailData) {
+	@Layout(data.Source.Name, "/admin/triggers") {
+		<div class="mb-3">
+			<a href="/admin/triggers" class="has-text-link is-size-7">← Triggers</a>
+		</div>
+		<div class="box mb-5">
+			<div class="is-flex is-justify-content-space-between is-align-items-flex-start" style="gap: 0.75rem">
+				<div style="flex: 1; min-width: 0">
+					<div class="is-flex is-align-items-center is-flex-wrap-wrap mb-1" style="gap: 0.5rem">
+						<h1 class="title is-4 mb-0">{ data.Source.Name }</h1>
+						<span x-data={ fmt.Sprintf(`{ enabled: %v }`, data.Source.Enabled) }>
+							<button
+								x-on:click={ fmt.Sprintf(`fetch('/api/triggers/%s/enabled',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!enabled})}).then(r=>{ if(r.ok) enabled=!enabled })`, data.Source.ID) }
+								:class="enabled ? 'tag is-success' : 'tag is-grey'"
+								class="tag"
+								role="switch"
+								:aria-checked="enabled"
+								x-text="enabled ? 'On' : 'Off'"
+							></button>
+						</span>
+					</div>
+					<p class="is-size-7 has-text-grey">{ data.TriggerType.Label() }</p>
+				</div>
+				<span x-data="{ confirming: false }">
+					<button
+						x-show="!confirming"
+						x-on:click.stop="confirming = true"
+						class="button is-danger is-outlined is-small"
+					>Delete pipeline</button>
+					<span x-show="confirming" style="display:none" class="buttons are-small mb-0">
+						<button
+							x-on:click.stop
+							hx-delete={ "/admin/fragments/triggers/" + data.Source.ID }
+							hx-swap="none"
+							hx-on:htmx:after-request="if(event.detail.successful) window.location.href='/admin/triggers'"
+							class="button is-danger is-small"
+						>Confirm</button>
+						<button x-on:click.stop="confirming = false" class="button is-small">Cancel</button>
+					</span>
+				</span>
+			</div>
+		</div>
+		if schema := data.TriggerType.DataSchema(); len(schema) > 0 {
+			<div class="box mb-4">
+				<p class="is-size-7 has-text-grey mb-2">Available variables:</p>
+				<div class="is-flex is-flex-wrap-wrap" style="gap: 0.25rem">
+					for _, f := range schema {
+						<code class="is-family-monospace is-size-7">{ "{{" + f.Key + "}}" }</code>
+					}
+				</div>
+			</div>
+		}
+		<div class="card mb-4">
+			@triggerEventActionList(data.Source.ID, data.Actions, data.ActionTypes, data.Channels, data.Users)
+		</div>
+	}
+}
+
+// --- Action path section (webhook detail — success/filter_fail/action_fail) ---
+templ triggerActionPathSection(wh store.Webhook, runOn string, header string, subtext string, types []plugin.ActionTypeInfo, channels []WHChannel, users []WHUser) {
+	<div>
+		<header class="card-header">
+			<p class="card-header-title">{ header }</p>
+			<span class="card-header-icon has-text-grey is-size-7">{ subtext }</span>
+			if wh.ManagedBy == nil || *wh.ManagedBy == "" {
+				<div class="card-header-icon">
+					<button
+						hx-get={ "/admin/fragments/triggers/" + wh.ID + "/action-add-form?run_on=" + runOn }
+						hx-target={ "#action-add-" + wh.ID + "-" + runOn }
+						hx-swap="innerHTML"
+						class="button is-ghost is-small has-text-link"
+					>+ Add action</button>
+				</div>
+			}
+		</header>
+		if len(whActionsByRunOn(wh.Actions, runOn)) == 0 {
+			<div class="card-content py-3">
+				@EmptyState("No actions configured for this path.")
+			</div>
+		}
+		for _, a := range whActionsByRunOn(wh.Actions, runOn) {
+			@TriggerActionRow(wh.ID, a, wh.ManagedBy, types, channels, users)
+		}
+		if wh.ManagedBy == nil || *wh.ManagedBy == "" {
+			<div id={ "action-add-" + wh.ID + "-" + runOn }></div>
+		}
+	</div>
+}
+
+// --- Event action list (internal trigger detail — success only) ---
+templ triggerEventActionList(sourceID string, actions []store.WebhookAction, types []plugin.ActionTypeInfo, channels []WHChannel, users []WHUser) {
+	<div>
+		<header class="card-header">
+			<p class="card-header-title">Actions</p>
+			<span class="card-header-icon has-text-grey is-size-7">Runs in order when the trigger fires</span>
+			<div class="card-header-icon">
+			<button
+				hx-get={ "/admin/fragments/triggers/" + sourceID + "/action-add-form?run_on=success" }
+				hx-target={ "#action-add-" + sourceID + "-success" }
+				hx-swap="innerHTML"
+				class="button is-ghost is-small has-text-link"
+			>+ Add action</button>
+			</div>
+		</header>
+		if len(actions) == 0 {
+			<div class="card-content py-3">
+				<p class="is-size-7 has-text-grey is-italic">No actions — add one below.</p>
+			</div>
+		}
+		for _, a := range actions {
+			@TriggerActionRow(sourceID, a, nil, types, channels, users)
+		}
+		<div id={ "action-add-" + sourceID + "-success" }></div>
+	</div>
+}
+
+// --- Filters section (webhook detail) ---
+templ triggerFiltersSection(wh store.Webhook, processorTypes []plugin.ProcessorInfo) {
+	<div>
+		<header class="card-header">
+			<p class="card-header-title">Filters</p>
+			<span class="card-header-icon has-text-grey is-size-7">All filters must pass for any actions to run</span>
+			if wh.ManagedBy == nil || *wh.ManagedBy == "" {
+				<div class="card-header-icon">
+					<button
+						hx-get={ "/admin/fragments/triggers/" + wh.ID + "/filter-form" }
+						hx-target={ "#filter-add-" + wh.ID }
+						hx-swap="innerHTML"
+						class="button is-ghost is-small has-text-link"
+					>+ Add filter</button>
+				</div>
+			}
+		</header>
+		if len(wh.Filters) == 0 {
+			<div class="card-content py-3">
+				@EmptyState("No filters — pipeline runs on every incoming request.")
+			</div>
+		}
+		for _, f := range wh.Filters {
+			@TriggerFilterRowDisplay(wh, f, processorTypes)
+		}
+		<div id={ "filter-add-" + wh.ID }></div>
+	</div>
+}
+
+// --- Unified action row ---
+templ TriggerActionRow(sourceID string, a store.WebhookAction, managedBy *string, types []plugin.ActionTypeInfo, channels []WHChannel, users []WHUser) {
+	<div id={ "action-row-" + a.ID } class="is-flex is-justify-content-space-between is-align-items-center px-4 py-3 is-size-7" style="border-top: 1px solid var(--bulma-border); gap: 0.75rem">
+		<div style="min-width: 0">
+			<span class="has-text-weight-semibold">{ whActionLabel(a.Type, types) }</span>
+			<span class="has-text-grey mx-2">·</span>
+			<span class="has-text-grey">{ whActionSummary(a, types, channels, users) }</span>
+		</div>
+		if managedBy == nil || *managedBy == "" {
+			<div class="is-flex is-align-items-center" style="gap: 0.5rem; flex-shrink: 0">
+				<button
+					hx-get={ "/admin/fragments/triggers/" + sourceID + "/actions/" + a.ID + "/edit-form" }
+					hx-target={ "#action-row-" + a.ID }
+					hx-swap="outerHTML"
+					class="button is-ghost is-small has-text-link px-1"
+				>Edit</button>
+				<span x-data="{ confirming: false }">
+					<button
+						x-show="!confirming"
+						x-on:click.stop="confirming = true"
+						class="button is-ghost is-small has-text-danger px-1"
+					>Delete</button>
+					<span x-show="confirming" style="display:none" class="buttons are-small mb-0">
+						<button
+							x-on:click.stop
+							hx-delete={ "/admin/fragments/triggers/" + sourceID + "/actions/" + a.ID }
+							hx-target={ "#action-row-" + a.ID }
+							hx-swap="outerHTML"
+							class="button is-danger is-small"
+						>Confirm</button>
+						<button x-on:click.stop="confirming = false" class="button is-small">Cancel</button>
+					</span>
+				</span>
+			</div>
+		}
+	</div>
+}
+
+// --- Unified action edit form ---
+templ TriggerActionEditForm(sourceID string, action *store.WebhookAction, actionTypes []plugin.ActionTypeInfo, channels []WHChannel, users []WHUser, locs []store.StorageLocation, categories []string, availVars []plugin.DataFieldDef) {
+	<div id={ "action-row-" + action.ID } class="px-4 py-3 panel-surface" style="border-top: 1px solid var(--bulma-border)">
+		<form
+			hx-patch={ "/admin/fragments/triggers/" + sourceID + "/actions/" + action.ID }
+			hx-target={ "#action-row-" + action.ID }
+			hx-swap="outerHTML"
+		>
+			<input type="hidden" name="position" value={ fmt.Sprintf("%d", action.Position) }/>
+			<input type="hidden" name="run_on" value={ action.RunOn }/>
+			<div class="field mb-4">
+				<label for="trigger-action-type" class="label is-small">Action type</label>
+				<div class="control">
+					<div class="select is-small is-fullwidth">
+						<select
+							id="trigger-action-type"
+							name="type"
+							hx-get={ "/admin/fragments/triggers/" + sourceID + "/action-params" }
+							hx-target="#trigger-action-params"
+							hx-trigger="change"
+							hx-include="[name='type'],[name='position']"
+						>
+							for _, at := range actionTypes {
+								<option value={ at.ID } selected?={ action.Type == at.ID }>{ at.Label }</option>
+							}
+							if whFindActionType(action.Type, actionTypes) == nil {
+								<option value={ action.Type } selected>{ action.Type }</option>
+							}
+						</select>
+					</div>
+				</div>
+			</div>
+			<div id="trigger-action-params">
+				if at := whFindActionType(whActionInitialType(action, actionTypes), actionTypes); at != nil {
+					@actionParamFields(at, whActionCurrentParams(action), channels, users, locs, availVars, categories, sourceID)
+				}
+			</div>
+			<div class="field is-grouped is-grouped-right mt-4">
+				<div class="control">
+					<button
+						type="button"
+						hx-get={ "/admin/fragments/triggers/" + sourceID + "/actions/" + action.ID + "/row" }
+						hx-target={ "#action-row-" + action.ID }
+						hx-swap="outerHTML"
+						class="button is-small"
+					>Cancel</button>
+				</div>
+				<div class="control">
+					<button type="submit" class="button is-primary is-small">Save action</button>
+				</div>
+			</div>
+		</form>
+	</div>
+}
+
+// --- Unified action add form ---
+templ TriggerActionAddForm(sourceID string, runOn string, actionTypes []plugin.ActionTypeInfo, channels []WHChannel, users []WHUser, locs []store.StorageLocation, categories []string, availVars []plugin.DataFieldDef) {
+	<div class="px-4 py-3 panel-surface" style="border-top: 1px solid var(--bulma-border)">
+		<form
+			hx-post={ "/admin/fragments/triggers/" + sourceID + "/actions" }
+			hx-target={ "#action-add-" + sourceID + "-" + runOn }
+			hx-swap="innerHTML"
+		>
+			<input type="hidden" name="run_on" value={ runOn }/>
+			<div class="field mb-4">
+				<label for="trigger-action-type-new" class="label is-small">Action type</label>
+				<div class="control">
+					<div class="select is-small is-fullwidth">
+						<select
+							id="trigger-action-type-new"
+							name="type"
+							hx-get={ "/admin/fragments/triggers/" + sourceID + "/action-params" }
+							hx-target="#trigger-action-params-new"
+							hx-trigger="change"
+							hx-include="[name='type']"
+						>
+							for _, at := range actionTypes {
+								<option value={ at.ID }>{ at.Label }</option>
+							}
+						</select>
+					</div>
+				</div>
+			</div>
+			<div id="trigger-action-params-new">
+				if at := whFindActionType(whActionInitialType(nil, actionTypes), actionTypes); at != nil {
+					@actionParamFields(at, nil, channels, users, locs, availVars, categories, sourceID)
+				}
+			</div>
+			<div class="field is-grouped is-grouped-right mt-4">
+				<div class="control">
+					<button
+						type="button"
+						data-target={ "action-add-" + sourceID + "-" + runOn }
+						onclick="document.getElementById(this.dataset.target).innerHTML=''"
+						class="button is-small"
+					>Cancel</button>
+				</div>
+				<div class="control">
+					<button type="submit" class="button is-primary is-small">Save action</button>
+				</div>
+			</div>
+		</form>
+	</div>
+}
+
+// --- Unified action param fields fragment ---
+templ TriggerActionParamFields(at *plugin.ActionTypeInfo, current map[string]any, channels []WHChannel, users []WHUser, locs []store.StorageLocation, availVars []plugin.DataFieldDef, categories []string, sourceID string) {
+	if at != nil {
+		@actionParamFields(at, current, channels, users, locs, availVars, categories, sourceID)
+	}
+}
+
+// --- Filter row display ---
+templ TriggerFilterRowDisplay(wh store.Webhook, f store.WebhookFilter, processorTypes []plugin.ProcessorInfo) {
+	<div id={ "filter-row-" + f.ID } class="is-flex is-justify-content-space-between is-align-items-center px-4 py-3 is-size-7" style="border-top: 1px solid var(--bulma-border); gap: 0.75rem">
+		<div style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+			<code class="is-family-monospace">{ whFilterFieldLabel(f.Field, whProcessorSchema(wh.ProcessorType, processorTypes)) }</code>
+			<span class="has-text-grey mx-1">{ whOperatorLabel(f.Operator) }</span>
+			if sv := whFilterSummaryValue(f); sv != "" {
+				<code class="is-family-monospace">{ sv }</code>
+			}
+		</div>
+		if wh.ManagedBy == nil || *wh.ManagedBy == "" {
+			<div class="is-flex is-align-items-center" style="gap: 0.5rem; flex-shrink: 0">
+				<button
+					hx-get={ "/admin/fragments/triggers/" + wh.ID + "/filter-form?filterId=" + f.ID }
+					hx-target={ "#filter-row-" + f.ID }
+					hx-swap="outerHTML"
+					class="button is-ghost is-small has-text-link px-1"
+				>Edit</button>
+				<span x-data="{ confirming: false }">
+					<button
+						x-show="!confirming"
+						x-on:click.stop="confirming = true"
+						class="button is-ghost is-small has-text-danger px-1"
+					>Remove</button>
+					<span x-show="confirming" style="display:none" class="buttons are-small mb-0">
+						<button
+							x-on:click.stop
+							hx-delete={ "/admin/fragments/triggers/" + wh.ID + "/filters/" + f.ID }
+							hx-target={ "#filter-row-" + f.ID }
+							hx-swap="outerHTML"
+							class="button is-danger is-small"
+						>Confirm</button>
+						<button x-on:click.stop="confirming = false" class="button is-small">Cancel</button>
+					</span>
+				</span>
+			</div>
+		}
+	</div>
+}
+
+// --- Filter edit form ---
+templ TriggerFilterEditForm(sourceID string, filter *store.WebhookFilter, schema []plugin.DataFieldDef) {
+	<div
+		id={ "filter-row-" + filter.ID }
+		class="px-4 py-3 panel-surface"
+		style="border-top: 1px solid var(--bulma-border)"
+		x-data={ filterFormAlpineData(schema, whFilterInitialField(filter), whFilterInitialOp(filter), whFilterInitialVal(filter)) }
+	>
+		<form
+			hx-patch={ "/admin/fragments/triggers/" + sourceID + "/filters/" + filter.ID }
+			hx-target={ "#filter-row-" + filter.ID }
+			hx-swap="outerHTML"
+		>
+			<input type="hidden" name="position" value={ fmt.Sprintf("%d", filter.Position) }/>
+			<div class="field mb-3">
+				<label for="trigger-filter-field" class="label is-small">Field</label>
+				<div class="control">
+					if len(schema) > 0 {
+						<div class="select is-small is-fullwidth">
+							<select id="trigger-filter-field" x-model="field">
+								<option value="">— select field —</option>
+								for _, d := range schema {
+									<option value={ d.Key } selected?={ whFilterInitialField(filter) == d.Key }>{ d.Label } ({ d.Key })</option>
+								}
+							</select>
+						</div>
+					} else {
+						<input
+							id="trigger-filter-field"
+							type="text"
+							x-model="field"
+							placeholder="e.g. duration_secs"
+							class="input is-small"
+						/>
+					}
+				</div>
+				<input type="hidden" name="field" :value="field"/>
+			</div>
+			<div class="field mb-3">
+				<label for="trigger-filter-op" class="label is-small">Operator</label>
+				<div class="control">
+					<div class="select is-small is-fullwidth">
+						<select id="trigger-filter-op" x-model="operator">
+							<template x-for="op in operators" :key="op.value">
+								<option :value="op.value" :selected="op.value === operator" x-text="op.label"></option>
+							</template>
+						</select>
+					</div>
+				</div>
+				<input type="hidden" name="operator" :value="operator"/>
+			</div>
+			<div class="field mb-3" x-show="needsValue">
+				<label for="trigger-filter-val" class="label is-small">Value</label>
+				<div class="control">
+					<div class="select is-small is-fullwidth" x-show="fieldType === 'boolean'">
+						<select id="trigger-filter-val-bool" x-model="value">
+							<option value="true">true</option>
+							<option value="false">false</option>
+						</select>
+					</div>
+					<input
+						id="trigger-filter-val"
+						x-show="fieldType !== 'boolean'"
+						:type="fieldType === 'number' ? 'number' : 'text'"
+						x-model="value"
+						placeholder="Comparison value"
+						class="input is-small"
+					/>
+				</div>
+				<input type="hidden" name="value" :value="needsValue ? value : ''"/>
+			</div>
+			<div class="field is-grouped is-grouped-right">
+				<div class="control">
+					<button
+						type="button"
+						hx-get={ "/admin/fragments/triggers/" + sourceID + "/filters/" + filter.ID + "/row" }
+						hx-target={ "#filter-row-" + filter.ID }
+						hx-swap="outerHTML"
+						class="button is-small"
+					>Cancel</button>
+				</div>
+				<div class="control">
+					<button type="submit" class="button is-primary is-small">Save filter</button>
+				</div>
+			</div>
+		</form>
+	</div>
+}
+
+// --- Filter add form ---
+templ TriggerFilterAddForm(sourceID string, schema []plugin.DataFieldDef) {
+	<div
+		class="px-4 py-3 panel-surface"
+		style="border-top: 1px solid var(--bulma-border)"
+		x-data={ filterFormAlpineData(schema, "", "eq", "") }
+	>
+		<form hx-post={ "/admin/fragments/triggers/" + sourceID + "/filters" }>
+			<div class="field mb-3">
+				<label for="trigger-filter-field-new" class="label is-small">Field</label>
+				<div class="control">
+					if len(schema) > 0 {
+						<div class="select is-small is-fullwidth">
+							<select id="trigger-filter-field-new" x-model="field">
+								<option value="">— select field —</option>
+								for _, d := range schema {
+									<option value={ d.Key }>{ d.Label } ({ d.Key })</option>
+								}
+							</select>
+						</div>
+					} else {
+						<input
+							id="trigger-filter-field-new"
+							type="text"
+							x-model="field"
+							placeholder="e.g. duration_secs"
+							class="input is-small"
+						/>
+					}
+				</div>
+				<input type="hidden" name="field" :value="field"/>
+			</div>
+			<div class="field mb-3">
+				<label for="trigger-filter-op-new" class="label is-small">Operator</label>
+				<div class="control">
+					<div class="select is-small is-fullwidth">
+						<select id="trigger-filter-op-new" x-model="operator">
+							<template x-for="op in operators" :key="op.value">
+								<option :value="op.value" :selected="op.value === operator" x-text="op.label"></option>
+							</template>
+						</select>
+					</div>
+				</div>
+				<input type="hidden" name="operator" :value="operator"/>
+			</div>
+			<div class="field mb-3" x-show="needsValue">
+				<label for="trigger-filter-val-new" class="label is-small">Value</label>
+				<div class="control">
+					<div class="select is-small is-fullwidth" x-show="fieldType === 'boolean'">
+						<select id="trigger-filter-val-new-bool" x-model="value">
+							<option value="true">true</option>
+							<option value="false">false</option>
+						</select>
+					</div>
+					<input
+						id="trigger-filter-val-new"
+						x-show="fieldType !== 'boolean'"
+						:type="fieldType === 'number' ? 'number' : 'text'"
+						x-model="value"
+						placeholder="Comparison value"
+						class="input is-small"
+					/>
+				</div>
+				<input type="hidden" name="value" :value="needsValue ? value : ''"/>
+			</div>
+			<div class="field is-grouped is-grouped-right">
+				<div class="control">
+					<button
+						type="button"
+						data-target={ "filter-add-" + sourceID }
+						onclick="document.getElementById(this.dataset.target).innerHTML=''"
+						class="button is-small"
+					>Cancel</button>
+				</div>
+				<div class="control">
+					<button type="submit" class="button is-primary is-small">Save filter</button>
+				</div>
+			</div>
+		</form>
+	</div>
+}
+
+// --- Trigger event section fragment (returned after creating a new event pipeline) ---
+templ TriggerEventSectionFragment(group EventTriggerGroup, data *TriggersPageData) {
+	@triggerEventSection(group, data)
+}
+
+func triggerSectionID(triggerID string) string {
+	return strings.ReplaceAll(triggerID, ".", "-")
+}

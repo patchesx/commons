@@ -1,0 +1,159 @@
+package admintempl
+
+templ DocsPage() {
+	@Layout("Documentation", "/admin/docs") {
+		<div style="max-width: 48rem">
+			<h1 class="title is-4 mb-1">Documentation</h1>
+			<p class="has-text-grey mb-5">A guide to everything in this admin panel.</p>
+			<!-- Overview -->
+			@docsSection("What is this?") {
+				<div class="content is-size-6">
+					<p>
+						This platform is an operations hub for your organization. It gives your members access to a resource library, job listings, legislation tracking, and channel requests through a Slack App Home — and it automates routine admin work like meeting recordings, scheduling reminders, and bill tracking.
+					</p>
+					<p>
+						Integrations are modular: you connect the services your org actually uses (Zoom, YouTube, Google Drive, Slack, and others) and configure the webhooks and actions that tie them together. Nothing is hardcoded — if you don't use Zoom, you don't need to configure it.
+					</p>
+					<p>
+						This admin panel is for org administrators only. Members interact with the platform through Slack, not here.
+					</p>
+				</div>
+			}
+			<!-- Operations -->
+			<h2 class="title is-5 mt-5 mb-3">Operations</h2>
+			@docsSection("Jobs") {
+				<div class="content is-size-6">
+					<p>Jobs are background tasks the platform runs automatically — most commonly video uploads triggered when a Zoom meeting ends. Each job moves through a lifecycle:</p>
+					<ul>
+						<li><strong>Pending</strong> — queued, waiting to start.</li>
+						<li><strong>Running</strong> — actively in progress.</li>
+						<li><strong>Complete</strong> — finished successfully.</li>
+						<li><strong>Failed</strong> — something went wrong; check the error message in the job detail.</li>
+						<li><strong>Cancelled</strong> — stopped manually.</li>
+					</ul>
+					<p>Click any row to expand its details. Pending and running jobs can be cancelled using the button in the detail panel.</p>
+				</div>
+			}
+			@docsSection("Meetings") {
+				<div class="content is-size-6">
+					<p>Upcoming meetings synced from Zoom. The list updates when you click <strong>Sync Now</strong> or whenever the platform polls Zoom automatically.</p>
+					<p>Use <strong>Get Start URL</strong> to retrieve the host-only link needed to start a meeting. Start URLs expire quickly and are sensitive — do not share them publicly.</p>
+				</div>
+			}
+			@docsSection("Work Items") {
+				<div class="content is-size-6">
+					<p>Work items are manual tasks flagged for admin attention — things like member-reported issues or feature requests that came through the Slack bot. Use the status and notes fields to track progress and communicate internally.</p>
+				</div>
+			}
+			@docsSection("Audit Log") {
+				<div class="content is-size-6">
+					<p>The audit log is an append-only record of every admin action taken in this panel — who changed what, and when. It cannot be edited or deleted. Use it to understand what happened if something looks off.</p>
+					<p>Click a row to expand and see the full detail, including any before/after data stored with the action.</p>
+				</div>
+			}
+			<!-- Setup -->
+			<h2 class="title is-5 mt-5 mb-3">Setup</h2>
+			@docsSection("Integrations") {
+				<div class="content is-size-6">
+					<p>This is where you enter API credentials for connected services — Slack, Zoom, YouTube, Google Drive, and others. Each service has a collapsible card. Sensitive values (tokens, secrets) are masked by default and stored encrypted in the database.</p>
+					<p>Credentials are hot-reloadable: updating a value here takes effect immediately without restarting the server.</p>
+					<p class="is-size-7 has-text-grey">Note: You'll need to create app registrations in each service's developer portal first to get your credentials. See the README files for setup guides.</p>
+				</div>
+			}
+			@docsSection("Settings") {
+				<div class="content is-size-6">
+					<p>Settings control high-level platform behavior:</p>
+					<ul>
+						<li><strong>Meeting Scheduling</strong> — configure the connection between Zoom and the scheduler so meetings can be created from Slack.</li>
+						<li><strong>Calendars</strong> — see a summary of imported calendars and upcoming events.</li>
+						<li><strong>Legislation</strong> — see a summary of tracked bills and recent updates.</li>
+						<li><strong>Notifications</strong> — choose how notification DMs are routed (Slack, Discord, Matrix, or all).</li>
+						<li><strong>Member Access</strong> — toggle open registration and set the default role new users receive when they first open the App Home.</li>
+						<li><strong>Storage</strong> — see where uploaded files are being saved (Google Drive, Nextcloud, etc.). Only shown when a storage integration is configured.</li>
+					</ul>
+				</div>
+			}
+			@docsSection("Triggers") {
+				<div class="content is-size-6">
+					<p>Triggers connect events to actions. There are two kinds:</p>
+					<ul>
+						<li><strong>HTTP Webhooks</strong> — external services call a URL (e.g. Zoom firing when a recording is ready). Each webhook can have filters (conditions that must be true) and multiple action paths (run on success, filter fail, or action error).</li>
+						<li><strong>Event Triggers</strong> — fire automatically on internal events (a member joining Slack, a recording uploading, a meeting reminder firing). Each trigger type can have multiple pipelines with ordered actions.</li>
+					</ul>
+					<p>Actions run in the order listed. Use <code>{ "{{key}}" }</code> placeholders in message templates to include values from the event.</p>
+					<p class="is-size-7 has-text-grey">Example: Zoom fires a webhook when a meeting recording is ready → filter checks duration → actions upload to YouTube, save to Drive, and post the link to Slack.</p>
+				</div>
+			}
+			@docsSection("Scheduler") {
+				<div class="content is-size-6">
+					<p>The scheduler runs recurring background jobs on a configurable interval. Each job can be independently enabled or disabled, and you can adjust how often it runs.</p>
+					<p>Current scheduled jobs include meeting reminders (sent to Slack before upcoming meetings) and overdue reminders (for work items that have been open too long).</p>
+				</div>
+			}
+			@docsSection("Roles") {
+				<div class="content is-size-6">
+					<p>Roles are named bundles of permissions. You assign roles to users; the permissions they hold determine what they can see and do in the Slack App Home.</p>
+					<ul>
+						<li><strong>System roles</strong> (marked with a badge) are built in and cannot be deleted, though you can edit their permission set.</li>
+						<li><strong>Custom roles</strong> can be created, renamed, and deleted freely.</li>
+					</ul>
+					<p class="is-size-7 has-text-grey">Tip: Permission keys are grouped by prefix (e.g. <code>legislation.*</code>, <code>resources.*</code>). Check boxes for the specific capabilities each role should have.</p>
+				</div>
+			}
+			@docsSection("App Home") {
+				<div class="content is-size-6">
+					<p>App Home is the Slack interface members see when they open this app in Slack. From here you can manage:</p>
+					<ul>
+						<li><strong>Quick Links</strong> — pinned links shown prominently in the App Home (e.g. meeting link, org website, shared docs).</li>
+						<li><strong>Contacts</strong> — named contacts with a linked Slack user, shown so members know who to reach out to for specific things.</li>
+					</ul>
+				</div>
+		}
+		<!-- Members -->
+			<h2 class="title is-5 mt-5 mb-3">Members</h2>
+			@docsSection("Users") {
+				<div class="content is-size-6">
+					<p>Users are Slack members who have opened the App Home at least once. Accounts are created automatically on first visit — you don't need to manually add them.</p>
+					<p>From this page you can assign and remove roles, and promote a user to a web admin account (which grants access to this admin panel). Deactivated users can no longer interact with the bot.</p>
+				</div>
+			}
+			<!-- Content -->
+			<h2 class="title is-5 mt-5 mb-3">Content</h2>
+			@docsSection("Resources") {
+				<div class="content is-size-6">
+					<p>Resources are the videos and links members can browse in the Slack App Home. There are two ways to add one:</p>
+					<ul>
+						<li><strong>Upload a video</strong> — upload an MP4 file directly to YouTube or Vimeo. The platform streams it from your browser to the video host without storing anything locally.</li>
+						<li><strong>Add a link</strong> — add any URL (an existing video, a document, a website) along with a title and category.</li>
+					</ul>
+					<p>Categories help members find relevant content. Renaming a category updates it everywhere instantly.</p>
+					<p class="is-size-7 has-text-grey">Tip: When a Zoom recording is automatically uploaded via a webhook, the platform creates a resource entry for you.</p>
+				</div>
+			}
+			@docsSection("Legislation") {
+				<div class="content is-size-6">
+					<p>The legislation tracker pulls in bills and council matters from external sources and lets members subscribe to updates via Slack DM. There are three tabs:</p>
+					<ul>
+						<li><strong>Bills</strong> — tracked bills from all configured bodies. Filter by body. Click a bill to see details or dismiss it. Dismissed bills are permanently hidden from sync.</li>
+						<li><strong>Bodies</strong> — the legislative bodies you're tracking (e.g. "Illinois General Assembly", "Chicago City Council"). Each body has import filters that control which bills are automatically pulled in based on subject matter or matter type.</li>
+						<li><strong>Tags</strong> — labels you can apply to bills for grouping and discovery.</li>
+					</ul>
+					<p>The sync button on the Bills tab manually triggers a refresh from all connected sources. The platform also syncs automatically once per day.</p>
+				</div>
+			}
+			@docsSection("Calendars") {
+				<div class="content is-size-6">
+					<p>Calendars are ICS feeds you import from external sources (Google Calendar, Outlook, etc.). Once added, upcoming events appear in the Slack App Home for members to see.</p>
+					<p>You can add standalone events directly if you don't have an ICS feed, or if you want to supplement one with a one-off event.</p>
+				</div>
+			}
+		</div>
+	}
+}
+
+templ docsSection(title string) {
+	<div class="box mb-4">
+		<h3 class="title is-6 mb-3">{ title }</h3>
+		{ children... }
+	</div>
+}

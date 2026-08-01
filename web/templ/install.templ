@@ -1,0 +1,145 @@
+package admintempl
+
+templ InstallPage() {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>Setup — Commons</title>
+			<link rel="stylesheet" href={ templ.URL(AssetURL("bulma.min.css")) }/>
+			<link rel="stylesheet" href={ templ.URL(AssetURL("app.css")) }/>
+			<script src="/.within.website/x/htmx/htmx.js"></script>
+		</head>
+		<body>
+			<section class="hero is-fullheight">
+				<div class="hero-body">
+					<div style="width: 100%; max-width: 36rem; margin: 0 auto">
+						<div class="has-text-centered mb-6">
+							<h1 class="title is-4">Welcome</h1>
+							<p class="subtitle is-6 has-text-grey">Let&#39;s get your platform set up.</p>
+						</div>
+						<div id="install-step">
+							@InstallStepAdmin("")
+						</div>
+					</div>
+				</div>
+			</section>
+		</body>
+	</html>
+}
+
+templ InstallStepAdmin(errMsg string) {
+	<div id="install-step" class="box">
+		<div class="mb-4">
+			<p class="is-size-7 has-text-grey has-text-weight-semibold mb-1" style="text-transform: uppercase; letter-spacing: 0.05em">Step 1 of 2</p>
+			<h2 class="title is-5 mb-1">Admin Account</h2>
+			<p class="is-size-6 has-text-grey">Create your administrator account.</p>
+		</div>
+		if errMsg != "" {
+			<div class="notification is-danger mb-4" role="alert">{ errMsg }</div>
+		}
+		<form
+			hx-post="/install/admin"
+			hx-target="#install-step"
+			hx-swap="outerHTML"
+		>
+			<div class="field mb-4">
+				<label for="display_name" class="label">Display Name</label>
+				<div class="control">
+					<input
+						id="display_name"
+						type="text"
+						name="display_name"
+						required
+						autofocus
+						class="input"
+					/>
+				</div>
+			</div>
+			<div class="field mb-4">
+				<label for="email" class="label">Email</label>
+				<div class="control">
+					<input
+						id="email"
+						type="email"
+						name="email"
+						required
+						class="input"
+					/>
+				</div>
+			</div>
+			<div class="field mb-4">
+				<label for="password" class="label">Password</label>
+				<div class="control">
+					<input
+						id="password"
+						type="password"
+						name="password"
+						required
+						autocomplete="new-password"
+						class="input"
+					/>
+				</div>
+			</div>
+			<div class="field mb-5">
+				<label for="password_confirm" class="label">Confirm Password</label>
+				<div class="control">
+					<input
+						id="password_confirm"
+						type="password"
+						name="password_confirm"
+						required
+						autocomplete="new-password"
+						class="input"
+					/>
+				</div>
+			</div>
+			<button type="submit" class="button is-primary">Create Account</button>
+		</form>
+	</div>
+}
+
+templ InstallStepOrg(errMsg string) {
+	<div id="install-step" class="box">
+		<div class="mb-4">
+			<p class="is-size-7 has-text-grey has-text-weight-semibold mb-1" style="text-transform: uppercase; letter-spacing: 0.05em">Step 2 of 2</p>
+			<h2 class="title is-5 mb-1">Your Organization</h2>
+			<p class="is-size-6 has-text-grey">Give your platform a name.</p>
+		</div>
+		if errMsg != "" {
+			<div class="notification is-danger mb-4" role="alert">{ errMsg }</div>
+		}
+		<form
+			hx-post="/install/org"
+			hx-target="#install-step"
+			hx-swap="outerHTML"
+		>
+			<div class="field mb-5">
+				<label for="org_name" class="label">Organization Name</label>
+				<div class="control">
+					<input
+						id="org_name"
+						type="text"
+						name="org_name"
+						required
+						autofocus
+						placeholder="My Chapter"
+						class="input"
+					/>
+				</div>
+			</div>
+			<button type="submit" class="button is-primary">Continue</button>
+		</form>
+	</div>
+}
+
+templ InstallStepComplete() {
+	<div id="install-step" class="box">
+		<h2 class="title is-5 mb-2">Setup complete</h2>
+		<p class="is-size-6 has-text-grey">Redirecting you to the login page...</p>
+		<script>
+			setTimeout(function() { window.location.href = '/login'; }, 1000);
+		</script>
+	</div>
+}

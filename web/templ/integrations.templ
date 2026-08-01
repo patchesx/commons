@@ -1,0 +1,464 @@
+package admintempl
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"commons/store"
+)
+
+// enableToggleData builds Alpine x-data for the enable/disable toggle on a card header.
+func enableToggleData(integID string, enabled bool) string {
+	enabledStr := "false"
+	if enabled {
+		enabledStr = "true"
+	}
+	id, _ := json.Marshal(integID)
+	return fmt.Sprintf(`{ enabled: %s, toggling: false,
+  async toggle() {
+    this.toggling = true;
+    const r = await fetch('/api/integrations/' + %s + '/enabled', {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({enabled: !this.enabled})
+    });
+    if (r.ok) this.enabled = !this.enabled;
+    this.toggling = false;
+  }
+}`, enabledStr, id)
+}
+
+// ConfigEntryView is a merged view of config_schema + config_store for a single key.
+type ConfigEntryView struct {
+	Key         string
+	Label       string
+	Description string
+	Sensitive   bool
+	Required    bool
+	Configured  bool
+	Value       string
+	InputType   string
+}
+
+// IntegrationListItemData holds data needed to render one integration on the list page.
+type IntegrationListItemData struct {
+	Integration store.Integration
+	HasMissing  bool
+}
+
+// IntegrationDetailData holds data needed to render the integration detail page.
+type IntegrationDetailData struct {
+	Integration  store.Integration
+	Entries      []ConfigEntryView
+	HasMissing   bool
+	HasSensitive bool
+	HasSetup     bool
+}
+
+// credRowData builds the Alpine x-data JSON string for a config entry row.
+func credRowData(e ConfigEntryView) string {
+	displayVal := e.Value
+	editVal := ""
+	if !e.Sensitive {
+		editVal = e.Value
+	}
+	display, _ := json.Marshal(displayVal)
+	val, _ := json.Marshal(editVal)
+	configured := e.Configured
+	return fmt.Sprintf(`{ editing: false, val: %s, display: %s, sensitive: %v, configured: %v, channels: [], loadingChannels: false, errMsg: '',
+  async save(service, key) {
+    this.errMsg = '';
+    try {
+      const r = await fetch('/api/config/' + service + '/' + key, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({value: this.val}) });
+      if (!r.ok) throw new Error('Save failed');
+      this.configured = !!this.val;
+      this.display = this.sensitive ? (this.val ? '●●●●●●●●' : '') : this.val;
+      this.editing = false;
+    } catch { this.errMsg = 'Failed to save' }
+  },
+  async loadChannels() {
+    if (this.channels.length) return;
+    this.loadingChannels = true;
+    try { const r = await fetch('/api/slack/channels'); if (r.ok) this.channels = await r.json(); } finally { this.loadingChannels = false; }
+  }
+}`, val, display, e.Sensitive, configured)
+}
+
+// boolRowData builds Alpine x-data for a boolean config entry row.
+func boolRowData(e ConfigEntryView) string {
+	val := "false"
+	if e.Value == "true" {
+		val = "true"
+	}
+	return fmt.Sprintf(`{ val: '%s',
+  async toggle(service, key) {
+    const newVal = this.val === 'true' ? 'false' : 'true';
+    const r = await fetch('/api/config/' + service + '/' + key, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({value: newVal}) });
+    if (r.ok) this.val = newVal;
+  }
+}`, val)
+}
+
+// StorageLocationsCard renders the storage locations section.
+templ StorageLocationsCard(integrationID string, locations []store.StorageLocation) {
+	@SectionedCard("Storage Locations", nil) {
+		<div class="px-4 py-4" x-data="{ adding: false, name: '', path: '', saving: false, errMsg: '' }">
+			if len(locations) == 0 {
+				<p class="is-size-7 has-text-grey mb-3">No storage locations added. Add a Google Drive folder to set where recordings are saved.</p>
+			} else {
+				<ul class="mb-3">
+					for _, loc := range locations {
+						<li class="is-flex is-justify-content-space-between is-align-items-center py-2" style="border-bottom: 1px solid var(--bulma-border)" x-data="{ confirmDel: false }">
+							<div style="min-width: 0; flex: 1">
+								<div class="has-text-weight-semibold is-size-7">{ loc.Name }</div>
+								<div class="is-family-monospace is-size-7 has-text-grey" style="word-break: break-all">{ loc.Path }</div>
+							</div>
+							<div class="buttons are-small mb-0 ml-3">
+								<span x-show="!confirmDel">
+									<button x-on:click.stop="confirmDel = true" class="button is-danger is-outlined is-small">Delete</button>
+								</span>
+								<span x-show="confirmDel" style="display:none" class="buttons are-small mb-0">
+									<button
+										hx-delete={ "/api/storage-locations/" + loc.ID }
+										hx-target="closest li"
+										hx-swap="delete"
+										class="button is-danger is-small"
+									>Confirm</button>
+									<button x-on:click.stop="confirmDel = false" class="button is-small">Cancel</button>
+								</span>
+							</div>
+						</li>
+					}
+				</ul>
+			}
+			<div class="mb-3">
+				<a href="/auth/google/connect" class="button is-link is-outlined is-small">Connect Google Account</a>
+				<p class="is-size-7 has-text-grey mt-1">Grants Google account access for recording upload and backup</p>
+			</div>
+			<div style="border-top: 1px solid var(--bulma-border); padding-top: 0.75rem">
+				<button
+					x-show="!adding"
+					x-on:click="adding = true"
+					class="button is-ghost is-small has-text-link px-0"
+				>+ Add Storage Location</button>
+				<div x-show="adding" style="display:none">
+					<h4 class="is-size-7 has-text-weight-semibold mb-2">Add Storage Location</h4>
+					<div class="columns is-mobile">
+						<div class="column">
+							<div class="field">
+								<label class="label is-small">Name</label>
+								<div class="control">
+									<input type="text" x-model="name" placeholder="e.g., Meeting Recordings" class="input is-small"/>
+								</div>
+							</div>
+						</div>
+						<div class="column">
+							<div class="field">
+								<label class="label is-small">Path (folder ID)</label>
+								<div class="control">
+									<input type="text" x-model="path" placeholder="Google Drive folder ID" class="input is-small is-family-monospace"/>
+								</div>
+							</div>
+						</div>
+					</div>
+					<span x-show="errMsg" x-text="errMsg" role="alert" class="help is-danger"></span>
+					<div class="buttons are-small">
+						<button
+							:disabled="saving || !name.trim() || !path.trim()"
+							x-on:click={ `
+								saving = true; errMsg = '';
+								fetch('/api/storage-locations', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({integrationId: '` + integrationID + `', name: name.trim(), path: path.trim()}) })
+									.then(r => r.ok ? window.location.reload() : r.json().then(d => { errMsg = d.error || 'Failed to add'; saving = false; }))
+									.catch(() => { errMsg = 'Failed to add'; saving = false; })
+							` }
+							class="button is-primary is-small"
+						>Add</button>
+						<button x-on:click="adding = false; name = ''; path = ''" class="button is-small">Cancel</button>
+					</div>
+				</div>
+			</div>
+		</div>
+	}
+}
+
+templ IntegrationsPage(items []IntegrationListItemData, available []store.Integration) {
+	@Layout("Integrations", "/admin/integrations") {
+		<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+			<h1 class="title is-4 mb-0">Integrations</h1>
+			if len(available) > 0 {
+				<button
+					hx-get="/admin/fragments/integrations/add-modal"
+					hx-target="#integrations-modal"
+					hx-swap="innerHTML"
+					hx-on:htmx:after-request="document.getElementById('integrations-modal').showModal()"
+					class="button is-primary"
+				>+ Add Plugin</button>
+			}
+		</div>
+		@PageHelp() {
+			<p class="is-size-7">
+				Connect the external services this platform relies on. Changes take effect immediately without a restart.
+			</p>
+		}
+		<div class="is-flex is-flex-direction-column" style="gap: 0.75rem">
+			for _, item := range items {
+				@integrationListCard(item)
+			}
+		</div>
+		<dialog id="integrations-modal" aria-labelledby="integrations-modal-title"></dialog>
+	}
+}
+
+templ integrationListCard(item IntegrationListItemData) {
+	<div
+		class="box is-flex is-justify-content-space-between is-align-items-center"
+		style="gap: 1rem"
+		x-data={ "{ ...(" + enableToggleData(item.Integration.ID, item.Integration.Enabled) + ")}" }
+	>
+		<div class="is-flex is-align-items-center" style="gap: 0.5rem; min-width: 0">
+			<span class="has-text-weight-semibold" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{ item.Integration.Name }</span>
+			if item.HasMissing {
+				<span class="tag is-warning is-rounded" style="flex-shrink: 0">Missing required settings</span>
+			}
+		</div>
+		<div class="is-flex is-align-items-center" style="gap: 0.75rem; flex-shrink: 0">
+			<span
+				class="tag is-rounded"
+				:class="enabled ? 'is-success' : ''"
+				x-text="enabled ? 'Enabled' : 'Disabled'"
+			></span>
+			<button
+				x-on:click="toggle()"
+				:disabled="toggling"
+				:class="enabled ? 'is-danger is-outlined' : 'is-success is-outlined'"
+				class="button is-small is-rounded"
+				x-text="enabled ? 'Disable' : 'Enable'"
+			></button>
+			<a
+				href={ templ.URL("/admin/integrations/" + item.Integration.Type) }
+				class="button is-small"
+			>Manage</a>
+		</div>
+	</div>
+}
+
+templ IntegrationDetailPage(data IntegrationDetailData) {
+	@Layout(data.Integration.Name, "/admin/integrations") {
+		<div class="mb-4">
+			<a href="/admin/integrations" class="has-text-link is-size-7">← Integrations</a>
+		</div>
+		<div
+			class="is-flex is-justify-content-space-between is-align-items-center mb-5"
+			x-data={ "{ ...(" + enableToggleData(data.Integration.ID, data.Integration.Enabled) + ")}" }
+		>
+			<h1 class="title is-4 mb-0">{ data.Integration.Name }</h1>
+			<div class="is-flex is-align-items-center" style="gap: 0.75rem">
+				<span
+					class="tag is-rounded"
+					:class="enabled ? 'is-success' : ''"
+					x-text="enabled ? 'Enabled' : 'Disabled'"
+				></span>
+				<button
+					x-on:click="toggle()"
+					:disabled="toggling"
+					:class="enabled ? 'is-danger is-outlined' : 'is-success is-outlined'"
+					class="button is-small is-rounded"
+					x-text="enabled ? 'Disable' : 'Enable'"
+				></button>
+			</div>
+		</div>
+		if data.HasSetup {
+			<div
+				hx-get={ "/admin/fragments/integrations/" + data.Integration.Type + "/setup" }
+				hx-trigger="load"
+				hx-swap="outerHTML"
+				class="mb-5"
+			></div>
+		}
+		<div class="card" x-data="{ revealed: false }">
+			<header class="card-header">
+				<p class="card-header-title">Credentials</p>
+				if data.HasSensitive {
+					<div class="card-header-icon">
+						<button
+							x-show="!revealed"
+							hx-get={ "/admin/fragments/config/" + data.Integration.Type + "?reveal=true" }
+							hx-target={ "#cred-table-" + data.Integration.Type }
+							hx-swap="outerHTML"
+							hx-on:htmx:after-request="revealed = true"
+							class="button is-small"
+						>Show credentials</button>
+					</div>
+				}
+			</header>
+			@credentialTableSection(data.Integration.Type, data.Entries, false)
+		</div>
+	}
+}
+
+// credentialTableSection is the HTMX-swappable inner credential table.
+templ credentialTableSection(service string, entries []ConfigEntryView, revealed bool) {
+	<div id={ "cred-table-" + service }>
+		if len(entries) == 0 {
+			<p class="px-4 py-4 is-size-7 has-text-grey">No configuration entries defined for this integration.</p>
+		} else {
+			for _, e := range entries {
+				if e.InputType == "boolean" {
+					@boolConfigRow(service, e)
+				} else {
+					@textConfigRow(service, e, revealed)
+				}
+			}
+		}
+	</div>
+}
+
+// CredentialTableSectionFragment renders the credential table for HTMX fragment endpoint.
+templ CredentialTableSectionFragment(service string, entries []ConfigEntryView, revealed bool) {
+	@credentialTableSection(service, entries, revealed)
+}
+
+templ boolConfigRow(service string, e ConfigEntryView) {
+	<div class="is-flex is-align-items-flex-start gap-4 px-4 py-4" style="border-bottom: 1px solid var(--bulma-border)" x-data={ boolRowData(e) }>
+		<div style="flex: 1">
+			<div class="has-text-weight-semibold is-size-7">{ e.Label }</div>
+			<div class="is-family-monospace is-size-7 has-text-grey">{ e.Key }</div>
+			if e.Description != "" {
+				<div class="is-size-7 has-text-grey-light mt-1">{ e.Description }</div>
+			}
+		</div>
+		<div style="flex-shrink: 0">
+			@ToggleButton("val === 'true'", "toggle('"+service+"', '"+e.Key+"')", "Toggle "+e.Label)
+		</div>
+	</div>
+}
+
+templ channelEditInput(service string, e ConfigEntryView) {
+	<div x-init="loadChannels()" class="control is-expanded">
+		<template x-if="loadingChannels">
+			<span class="is-size-7 has-text-grey">Loading channels…</span>
+		</template>
+		<template x-if="!loadingChannels">
+			<div class="select is-small is-fullwidth">
+				<select x-model="val">
+					<option value="">— Select a channel —</option>
+					<template x-for="ch in channels" :key="ch.id">
+						<option :value="ch.id" :selected="ch.id === val" x-text="'#' + ch.name"></option>
+					</template>
+				</select>
+			</div>
+		</template>
+	</div>
+}
+
+func editClickHandler(e ConfigEntryView) string {
+	if e.InputType == "channel" {
+		return "editing = true; loadChannels()"
+	}
+	return "editing = true"
+}
+
+func configInputPlaceholder(e ConfigEntryView) string {
+	if e.Configured {
+		return "Enter new value…"
+	}
+	return "Enter value…"
+}
+
+// AddPluginModalContent renders the "Add Plugin" modal.
+templ AddPluginModalContent(available []store.Integration) {
+	<div class="box">
+		<h2 id="integrations-modal-title" class="title is-5 mb-4">Add Plugin</h2>
+		<div x-data="{ selectedID: '' }">
+			<div class="field">
+				<label class="label">Plugin</label>
+				<div class="control">
+					<div class="select is-fullwidth">
+						<select
+							name="integration_id"
+							x-model="selectedID"
+							hx-get="/admin/fragments/integrations/config-fields"
+							hx-include="[name='integration_id']"
+							hx-target="#plugin-config-fields"
+							hx-trigger="change"
+						>
+							<option value="">— Select a plugin —</option>
+							for _, integ := range available {
+								<option value={ integ.ID }>{ integ.Name }</option>
+							}
+						</select>
+					</div>
+				</div>
+			</div>
+			<div id="plugin-config-fields"></div>
+		</div>
+	</div>
+}
+
+// AddPluginConfigFields renders the config form fields for a selected plugin.
+templ AddPluginConfigFields(integ store.Integration, entries []ConfigEntryView) {
+	<form
+		hx-post="/admin/fragments/integrations/add"
+		hx-on:htmx:after-request="if(event.detail.successful){ window.location.href='/admin/integrations' }"
+	>
+		<input type="hidden" name="integration_id" value={ integ.ID }/>
+		<input type="hidden" name="integration_type" value={ integ.Type }/>
+		if len(entries) == 0 {
+			<p class="is-size-7 has-text-grey mb-4">No configuration required for this plugin.</p>
+		} else {
+			<div class="mb-5">
+				for _, e := range entries {
+					<div class="field">
+						<label class="label is-small">
+							{ e.Label }
+							if e.Required {
+								<span class="has-text-danger ml-1">*</span>
+							}
+						</label>
+						if e.Description != "" {
+							<p class="help mb-1">{ e.Description }</p>
+						}
+						<div class="control">
+							<input
+								type={ addPluginInputType(e) }
+								name={ "cfg_" + e.Key }
+								placeholder="Enter value…"
+								class="input is-small is-family-monospace"
+							/>
+						</div>
+					</div>
+				}
+			</div>
+		}
+		<div class="field is-grouped is-grouped-right">
+			<div class="control">
+				<button
+					type="button"
+					x-on:click="document.getElementById('integrations-modal').close()"
+					class="button"
+				>Cancel</button>
+			</div>
+			<div class="control">
+				<button type="submit" class="button is-primary">Add Plugin</button>
+			</div>
+		</div>
+	</form>
+}
+
+func addPluginInputType(e ConfigEntryView) string {
+	if e.Sensitive {
+		return "password"
+	}
+	return "text"
+}
+
+// timezoneList returns IANA timezone names for the datalist.
+func timezoneList() []string {
+	return strings.Split(
+		"America/New_York,America/Chicago,America/Denver,America/Los_Angeles,America/Anchorage,"+
+			"America/Honolulu,America/Phoenix,Europe/London,Europe/Paris,Europe/Berlin,"+
+			"Asia/Tokyo,Asia/Shanghai,Asia/Kolkata,Australia/Sydney,Pacific/Auckland",
+		",",
+	)
+}

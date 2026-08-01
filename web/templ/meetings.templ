@@ -1,0 +1,145 @@
+package admintempl
+
+import (
+	"fmt"
+	"time"
+
+	"commons/store"
+)
+
+func meetingNextStart(m store.MeetingSummary) time.Time {
+	if m.IsRecurring && len(m.Occurrences) > 0 {
+		return m.Occurrences[0].StartTime
+	}
+	return m.NextStart
+}
+
+func meetingDuration(m store.MeetingSummary) int {
+	if m.IsRecurring && len(m.Occurrences) > 0 {
+		return m.Occurrences[0].DurationMinutes
+	}
+	return m.DurationMinutes
+}
+
+func formatMeetingStart(m store.MeetingSummary) string {
+	t := meetingNextStart(m)
+	if t.IsZero() {
+		return "No upcoming occurrences"
+	}
+	loc, err := time.LoadLocation(m.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	return t.In(loc).Format("Mon Jan 2, 2006 at 3:04 PM MST")
+}
+
+func formatDuration(minutes int) string {
+	if minutes < 60 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	h := minutes / 60
+	m := minutes % 60
+	if m == 0 {
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dh %dm", h, m)
+}
+
+templ MeetingsPage(meetings []store.MeetingSummary) {
+	@Layout("Meetings", "/admin/meetings") {
+		<div>
+			<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+				<h1 class="title is-4 mb-0">Meetings</h1>
+				<button
+					hx-post="/api/zoom/meetings/sync"
+					hx-swap="none"
+					hx-on:htmx:after-request="if(event.detail.successful){this.textContent='Syncing…';setTimeout(()=>{this.textContent='Sync Now';window.location.reload()},3000)}"
+					class="button is-primary is-small"
+				>Sync Now</button>
+			</div>
+			@PageHelp() {
+				Upcoming meetings synced from Zoom. Use <strong>Get Start URL</strong> to retrieve the host-only link for starting a meeting. Start URLs expire and are sensitive — do not share them publicly.
+			}
+			@SectionedCard("Upcoming Meetings", nil) {
+				if len(meetings) == 0 {
+					<div class="card-content">
+						@EmptyState("No upcoming meetings. Meetings scheduled in Zoom will appear here after a sync.")
+					</div>
+				} else {
+					for _, m := range meetings {
+						<div class="card-content" style="border-bottom: 1px solid var(--bulma-border)">
+							<div class="is-flex is-justify-content-space-between" style="gap: 1rem">
+								<div style="min-width: 0; flex: 1">
+									<div class="is-flex is-align-items-center is-flex-wrap-wrap" style="gap: 0.5rem">
+										<span class="has-text-weight-semibold">{ m.Topic }</span>
+										if m.IsRecurring {
+											@StatusBadge("recurring", "blue")
+										}
+									</div>
+									<p class="is-size-7 has-text-grey mt-1">
+										{ formatMeetingStart(m) }
+										if meetingDuration(m) > 0 {
+											· { formatDuration(meetingDuration(m)) }
+										}
+									</p>
+									if m.IsRecurring && len(m.Occurrences) == 0 {
+										<p class="is-size-7 has-text-grey-light mt-1">No upcoming occurrences</p>
+									}
+									<div class="mt-2 is-flex is-align-items-center is-flex-wrap-wrap" style="gap: 0.75rem">
+										<a
+											href={ templ.URL(meetingJoinURL(m)) }
+											target="_blank"
+											rel="noopener noreferrer"
+											class="is-size-7 has-text-link"
+										>Join URL</a>
+										<span id={ "start-url-" + m.ID }>
+											@startURLButton(m.ID)
+										</span>
+									</div>
+								</div>
+							</div>
+						</div>
+					}
+				}
+			}
+		</div>
+	}
+}
+
+func meetingJoinURL(m store.MeetingSummary) string {
+	return fmt.Sprintf("https://zoom.us/j/%d", m.ZoomMeetingID)
+}
+
+templ startURLButton(meetingID string) {
+	<button
+		hx-get={ "/admin/fragments/meetings/" + meetingID + "/start-url" }
+		hx-target={ "#start-url-" + meetingID }
+		hx-swap="outerHTML"
+		class="button is-ghost is-small px-0 is-size-7"
+	>Get Start URL</button>
+}
+
+templ StartURLFragment(meetingID, startURL string) {
+	<span id={ "start-url-" + meetingID } x-data="{ copied: false }" class="is-flex is-align-items-center" style="gap: 0.5rem">
+		<span class="is-size-7 is-family-monospace has-text-grey" style="max-width: 20rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title={ startURL }>{ startURL }</span>
+		<button
+			x-on:click={ fmt.Sprintf("navigator.clipboard.writeText('%s'); copied = true; setTimeout(() => copied = false, 2000)", startURL) }
+			class="button is-ghost is-small px-0 is-size-7"
+		>
+			<span x-show="!copied">Copy</span>
+			<span x-show="copied" x-cloak>Copied!</span>
+		</button>
+	</span>
+}
+
+templ StartURLErrorFragment(meetingID string) {
+	<span id={ "start-url-" + meetingID } class="is-size-7 has-text-danger">
+		Failed to load —
+		<button
+			hx-get={ "/admin/fragments/meetings/" + meetingID + "/start-url" }
+			hx-target={ "#start-url-" + meetingID }
+			hx-swap="outerHTML"
+			class="button is-ghost is-small px-0 is-size-7 has-text-danger"
+		>Retry</button>
+	</span>
+}

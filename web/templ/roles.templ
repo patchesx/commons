@@ -1,0 +1,507 @@
+package admintempl
+
+import (
+	"encoding/json"
+	"sort"
+	"strconv"
+	"strings"
+
+	"commons/store"
+)
+
+type RoleDetailView struct {
+	ID          string
+	Name        string
+	DisplayName string
+	Description string
+	SystemRole  bool
+	Permissions []string
+	Members     []RoleDetailMember
+}
+
+type RoleDetailMember struct {
+	DisplayName string
+	Email       string
+}
+
+type RoleGroupView struct {
+	ID          string
+	Name        string
+	DisplayName string
+	Description string
+	SystemGroup bool
+	RoleIDs     []string
+}
+
+func permissionsJSON(perms []string) string {
+	b, _ := json.Marshal(perms)
+	return string(b)
+}
+
+func roleIDsJSON(ids []string) string {
+	b, _ := json.Marshal(ids)
+	return string(b)
+}
+
+func groupedPermissions(perms []store.Permission) map[string][]store.Permission {
+	groups := map[string][]store.Permission{}
+	for _, p := range perms {
+		prefix := p.Key
+		if idx := strings.Index(p.Key, "."); idx >= 0 {
+			prefix = p.Key[:idx]
+		}
+		groups[prefix] = append(groups[prefix], p)
+	}
+	return groups
+}
+
+func sortedPermGroups(perms []store.Permission) []string {
+	seen := map[string]bool{}
+	var keys []string
+	for _, p := range perms {
+		prefix := p.Key
+		if idx := strings.Index(p.Key, "."); idx >= 0 {
+			prefix = p.Key[:idx]
+		}
+		if !seen[prefix] {
+			seen[prefix] = true
+			keys = append(keys, prefix)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func rolePermCount(n int) string {
+	if n == 1 {
+		return "1 permission"
+	}
+	return strconv.Itoa(n) + " permissions"
+}
+
+// roleLabel returns the human-readable label for a role, falling back to the
+// machine name when no display name is set.
+func roleLabel(name, displayName string) string {
+	if displayName != "" {
+		return displayName
+	}
+	return name
+}
+
+// rolesTabDefault returns the tab to show on load: "roles" when a role is
+// selected via ?role=, otherwise "groups".
+func rolesTabDefault(selectedID string) string {
+	if selectedID != "" {
+		return "roles"
+	}
+	return "groups"
+}
+
+templ RolesPage(roles []RoleDetailView, allPerms []store.Permission, groups []RoleGroupView, selectedID string) {
+	@Layout("Roles", "/admin/roles") {
+		<div x-data={ `{ tab: '` + rolesTabDefault(selectedID) + `', selectedId: '` + selectedID + `' }` }>
+			<h1 class="title is-4 mb-3">Roles</h1>
+			@PageHelp() {
+				Role groups bundle roles; users are assigned a group to control what they can see and do. Roles define the permission bundles each group can carry.
+			}
+			<div class="tabs mb-4">
+				<ul>
+					<li :class="tab === 'groups' ? 'is-active' : ''">
+						<a href="#" x-on:click.prevent="tab = 'groups'">Role Groups</a>
+					</li>
+					<li :class="tab === 'roles' ? 'is-active' : ''">
+						<a href="#" x-on:click.prevent="tab = 'roles'">Roles</a>
+					</li>
+				</ul>
+			</div>
+			<div id="roles-action-error" class="notification is-danger mb-3" role="alert" style="display:none"></div>
+			<div x-show="tab === 'roles'">
+				<div class="columns is-desktop">
+				<!-- Left panel: role list -->
+				<div class="column is-narrow-desktop" style="min-width: 16rem; max-width: 20rem">
+					<div
+						class="box p-0"
+						x-data="{ showCreate: false, newName: '', newDesc: '', creating: false }"
+					>
+						<div class="px-4 py-3 is-flex is-justify-content-space-between is-align-items-center" style="border-bottom: 1px solid var(--bulma-border)">
+							<span class="has-text-weight-semibold is-size-6">All Roles</span>
+							<button
+								x-on:click="showCreate = !showCreate; newName = ''; newDesc = ''"
+								:aria-expanded="showCreate"
+								class="button is-ghost is-small has-text-link px-0"
+							>
+								<span x-text="showCreate ? 'Cancel' : '+ New Role'"></span>
+							</button>
+						</div>
+						<div x-show="showCreate" style="display:none; border-bottom: 1px solid var(--bulma-border)" class="px-4 py-3">
+							<form
+								hx-post="/admin/fragments/roles"
+								hx-swap="none"
+								hx-on:htmx:after-request="if(event.detail.successful){ const loc=event.detail.xhr.getResponseHeader('HX-Redirect'); if(loc) window.location.href=loc; }"
+							>
+								<div class="field">
+									<div class="control">
+										<input
+											type="text"
+											name="name"
+											placeholder="Role name"
+											x-model="newName"
+											required
+											class="input is-small"
+										/>
+									</div>
+								</div>
+								<div class="field">
+									<div class="control">
+										<input
+											type="text"
+											name="description"
+											placeholder="Description (optional)"
+											x-model="newDesc"
+											class="input is-small"
+										/>
+									</div>
+								</div>
+								<div class="field">
+									<div class="control">
+										<button
+											type="submit"
+											:disabled="creating || !newName.trim()"
+											class="button is-primary is-small is-fullwidth"
+										>Create</button>
+									</div>
+								</div>
+							</form>
+						</div>
+						for _, role := range roles {
+							<div
+								x-on:click={ `selectedId = '` + role.ID + `'` }
+								x-on:keydown.enter.space.prevent={ `selectedId = '` + role.ID + `'` }
+								tabindex="0"
+								class="px-4 py-3"
+								:class={ `selectedId === '` + role.ID + `' ? 'has-background-primary-light' : ''` }
+								style="cursor: pointer; border-bottom: 1px solid var(--bulma-border)"
+							>
+								<div class="is-flex is-justify-content-space-between is-align-items-center" style="gap: 0.5rem">
+								<span
+									class="has-text-weight-semibold is-size-6"
+									style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap"
+									:class={ `selectedId === '` + role.ID + `' ? 'has-text-primary' : ''` }
+								>{ roleLabel(role.Name, role.DisplayName) }</span>
+								<div class="is-flex is-align-items-center" style="gap: 0.25rem; flex-shrink: 0" x-data="{ confirmDelete: false }">
+									if role.SystemRole {
+										<span class="tag is-rounded is-size-7">system</span>
+									} else {
+										<span x-show="!confirmDelete">
+											<button
+												x-on:click.stop="confirmDelete = true"
+												class="button is-danger is-ghost is-small px-1"
+												aria-label={ "Delete " + roleLabel(role.Name, role.DisplayName) }
+											>Delete</button>
+										</span>
+										<span :class="{ 'is-flex': confirmDelete, 'is-hidden': !confirmDelete }" class="is-align-items-center" style="gap: 0.25rem">
+											<button
+												x-on:click.stop
+												hx-delete={ "/admin/fragments/roles/" + role.ID }
+												hx-swap="none"
+												hx-on:htmx:after-request="if(event.detail.successful){ window.location.href='/admin/roles' }"
+												class="button is-danger is-small"
+												aria-label={ "Confirm delete " + roleLabel(role.Name, role.DisplayName) }
+											>Confirm</button>
+											<button
+												x-on:click.stop="confirmDelete = false"
+												class="button is-small"
+												aria-label={ "Cancel delete " + roleLabel(role.Name, role.DisplayName) }
+											>Cancel</button>
+										</span>
+									}
+								</div>
+								</div>
+								if role.Description != "" {
+									<p class="is-size-7 has-text-grey mt-1" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{ role.Description }</p>
+								}
+								<p class="is-size-7 has-text-grey-light mt-1">{ rolePermCount(len(role.Permissions)) }</p>
+							</div>
+						}
+					</div>
+				</div>
+				<!-- Right panel: role detail -->
+				<div class="column">
+					if len(roles) == 0 {
+						<p class="has-text-grey is-italic py-5 has-text-centered">No roles yet.</p>
+					}
+					for _, role := range roles {
+						<div
+							x-show={ `selectedId === '` + role.ID + `'` }
+							style="display:none"
+						>
+							<div x-data={
+								`{ editing: false, editName: ` + string(mustJSON(role.Name)) + `, editDisplayName: ` + string(mustJSON(role.DisplayName)) + `, editDesc: ` + string(mustJSON(role.Description)) + `, saving: false, perms: ` + permissionsJSON(role.Permissions) + `, permError: '',
+						  async togglePerm(key, checked) {
+						    this.permError = '';
+						    try {
+						      const url = checked ? '/api/roles/` + role.ID + `/permissions' : '/api/roles/` + role.ID + `/permissions/' + key;
+						      const r = await fetch(url, { method: checked ? 'POST' : 'DELETE', headers: {'Content-Type':'application/json'}, body: checked ? JSON.stringify({key}) : null });
+						      if (!r.ok) throw new Error('Request failed');
+						      if (checked) { this.perms.push(key) } else { this.perms = this.perms.filter(p => p !== key) }
+						    } catch { this.permError = 'Failed to update permission' }
+						  }
+						}` }>
+								<!-- Name/description card -->
+								<div class="box mb-4">
+									<div x-show="!editing">
+										<div class="is-flex is-justify-content-space-between is-align-items-flex-start" style="gap: 0.5rem">
+											<div>
+												<div class="is-flex is-align-items-center" style="gap: 0.5rem">
+													<h2 class="title is-5 mb-0">{ roleLabel(role.Name, role.DisplayName) }</h2>
+													if role.SystemRole {
+														<span class="tag is-rounded">system</span>
+													}
+												</div>
+												if role.Description != "" {
+													<p class="is-size-6 has-text-grey mt-1">{ role.Description }</p>
+												}
+											</div>
+										<div class="is-flex is-align-items-center" style="gap: 0.5rem">
+											<button
+												hx-post={ "/admin/fragments/roles/" + role.ID + "/duplicate" }
+												hx-swap="none"
+												hx-on:htmx:after-request="if(event.detail.successful){ const loc=event.detail.xhr.getResponseHeader('HX-Redirect'); if(loc) window.location.href=loc }"
+												class="button is-ghost is-small has-text-link"
+											>Duplicate</button>
+											<button
+												x-on:click={ `editing = true; editName = ` + string(mustJSON(role.Name)) + `; editDisplayName = ` + string(mustJSON(role.DisplayName)) + `; editDesc = ` + string(mustJSON(role.Description)) }
+												class="button is-ghost is-small has-text-link"
+											>Edit</button>
+										</div>
+										</div>
+									</div>
+									<div x-show="editing" style="display:none">
+										<form
+											hx-patch={ "/admin/fragments/roles/" + role.ID }
+											hx-swap="none"
+											hx-on:htmx:after-request="if(event.detail.successful){ const loc=event.detail.xhr.getResponseHeader('HX-Redirect'); if(loc) window.location.href=loc }"
+										>
+											<div class="field">
+												<div class="control">
+													<input
+														type="text"
+														name="display_name"
+														x-model="editDisplayName"
+														placeholder="Display name (shown in UI)"
+														class="input"
+													/>
+												</div>
+											</div>
+											<div class="field">
+												<div class="control">
+													<input
+														type="text"
+														name="name"
+														x-model="editName"
+														required
+														class="input"
+													/>
+												</div>
+											</div>
+											<div class="field">
+												<div class="control">
+													<input
+														type="text"
+														name="description"
+														x-model="editDesc"
+														placeholder="Description (optional)"
+														class="input"
+													/>
+												</div>
+											</div>
+											<div class="field is-grouped">
+												<div class="control">
+													<button
+														type="submit"
+														:disabled="saving || !editName.trim()"
+														class="button is-primary is-small"
+													>Save</button>
+												</div>
+												<div class="control">
+													<button
+														type="button"
+														x-on:click="editing = false"
+														class="button is-small"
+													>Cancel</button>
+												</div>
+											</div>
+										</form>
+									</div>
+								</div>
+								<!-- Permissions card -->
+								@SectionedCard("Permissions", nil) {
+									<div x-show="permError" style="display:none" class="px-4 pt-3 help is-danger" role="alert" x-text="permError"></div>
+									<div class="card-content">
+										for _, prefix := range sortedPermGroups(allPerms) {
+											<div class="mb-4">
+												<p class="is-size-7 has-text-weight-semibold has-text-grey mb-2" style="text-transform: uppercase; letter-spacing: 0.05em">
+													{ strings.ReplaceAll(prefix, "_", " ") }
+												</p>
+												for _, perm := range groupedPermissions(allPerms)[prefix] {
+													<label class="is-flex is-align-items-flex-start mb-2" style="gap: 0.5rem; cursor: pointer">
+														<input
+															type="checkbox"
+															:checked={ `perms.includes('` + perm.Key + `')` }
+															x-on:change={ `togglePerm('` + perm.Key + `', $event.target.checked)` }
+															class="mt-1"
+														/>
+														<div>
+															<span class="is-family-monospace is-size-7">{ perm.Key }</span>
+															if perm.Description != nil && *perm.Description != "" {
+																<span class="is-size-7 has-text-grey ml-2">{ *perm.Description }</span>
+															}
+														</div>
+													</label>
+												}
+											</div>
+										}
+									</div>
+								}
+								<!-- Members card -->
+								<div class="mt-4">
+									@SectionedCard("Users with this role", nil) {
+										if len(role.Members) == 0 {
+											<div class="card-content">@EmptyState("No members have this role yet.")</div>
+										} else {
+											for _, m := range role.Members {
+												<div class="card-content py-2" style="border-bottom: 1px solid var(--bulma-border)">
+													<div class="is-flex is-align-items-baseline" style="gap: 0.5rem">
+														<span class="is-size-6">{ m.DisplayName }</span>
+														if m.Email != "" {
+															<span class="is-size-7 has-text-grey">{ m.Email }</span>
+														}
+													</div>
+												</div>
+											}
+										}
+									}
+								</div>
+							</div>
+						</div>
+					}
+					<div
+						x-show={ `selectedId === ''` }
+						class="has-text-grey is-italic py-5 has-text-centered"
+					>
+					Select a role to view details.
+				</div>
+			</div>
+		</div>
+		</div>
+		<div x-show="tab === 'groups'">
+			<!-- Role Groups -->
+			<div class="mt-5">
+			@SectionedCard("Role Groups", nil) {
+				<div class="card-content">
+					<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+						<p class="is-size-7 has-text-grey">Users are assigned one role group. A group bundles roles; roles carry permissions.</p>
+						<div x-data="{ showCreate: false, newName: '', newDisplay: '', newDesc: '' }">
+							<button x-on:click="showCreate = !showCreate; newName = ''; newDisplay = ''; newDesc = ''" class="button is-ghost is-small has-text-link px-0">
+								<span x-text="showCreate ? 'Cancel' : '+ New Group'"></span>
+							</button>
+							<form
+								x-show="showCreate"
+								style="display:none"
+								hx-post="/admin/fragments/role-groups"
+								hx-swap="none"
+								hx-on:htmx:after-request="if(event.detail.successful){ const loc=event.detail.xhr.getResponseHeader('HX-Redirect'); if(loc) window.location.href=loc; }"
+								class="mt-2"
+							>
+								<div class="field is-grouped">
+									<div class="control"><input type="text" name="name" placeholder="Name (identifier)" x-model="newName" required class="input is-small"/></div>
+									<div class="control"><input type="text" name="display_name" placeholder="Display name" x-model="newDisplay" class="input is-small"/></div>
+									<div class="control"><input type="text" name="description" placeholder="Description" x-model="newDesc" class="input is-small"/></div>
+									<div class="control"><button type="submit" :disabled="!newName.trim()" class="button is-primary is-small">Create</button></div>
+								</div>
+							</form>
+						</div>
+					</div>
+					for _, g := range groups {
+						<div class="mb-4" style="border-bottom: 1px solid var(--bulma-border); padding-bottom: 1rem" x-data={
+							`{ editing: false, editName: ` + string(mustJSON(g.Name)) + `, editDisplay: ` + string(mustJSON(g.DisplayName)) + `, editDesc: ` + string(mustJSON(g.Description)) + `, roleIds: ` + roleIDsJSON(g.RoleIDs) + `, err: '',
+						  async toggleRole(roleId, checked) {
+						    this.err = '';
+						    try {
+						      const url = checked ? '/api/role-groups/` + g.ID + `/roles' : '/api/role-groups/` + g.ID + `/roles/' + roleId;
+						      const r = await fetch(url, { method: checked ? 'POST' : 'DELETE', headers: {'Content-Type':'application/json'}, body: checked ? JSON.stringify({roleId}) : null });
+						      if (!r.ok) throw new Error('failed');
+						      if (checked) { this.roleIds.push(roleId) } else { this.roleIds = this.roleIds.filter(id => id !== roleId) }
+						    } catch { this.err = 'Failed to update group' }
+						  }
+						}` }>
+							<div x-show="!editing">
+								<div class="is-flex is-justify-content-space-between is-align-items-center mb-2">
+									<div>
+										<span class="has-text-weight-semibold is-size-6">{ groupLabel(g.Name, g.DisplayName) }</span>
+										if g.SystemGroup {
+											<span class="tag is-rounded is-size-7 ml-1">system</span>
+										}
+										if g.Description != "" {
+											<span class="is-size-7 has-text-grey ml-2">{ g.Description }</span>
+										}
+									</div>
+									<div class="is-flex is-align-items-center" style="gap: 0.25rem">
+										<button x-on:click="editing = true" class="button is-ghost is-small has-text-link px-1">Edit</button>
+										if !g.SystemGroup {
+											<button
+												hx-delete={ "/admin/fragments/role-groups/" + g.ID }
+												hx-swap="none"
+												hx-on:htmx:after-request="if(event.detail.successful) window.location.href='/admin/roles'"
+												class="button is-danger is-ghost is-small px-1"
+											>Delete</button>
+										}
+									</div>
+								</div>
+								<div class="is-size-7 has-text-grey mb-1">Member roles:</div>
+								<div class="columns is-multiline">
+									for _, role := range roles {
+										<label class="column is-one-quarter is-flex is-align-items-center" style="gap: 0.5rem; cursor: pointer">
+											<input
+												type="checkbox"
+												:checked={ `roleIds.includes('` + role.ID + `')` }
+												x-on:change={ `toggleRole('` + role.ID + `', $event.target.checked)` }
+											/>
+											<span class="is-size-7">{ roleLabel(role.Name, role.DisplayName) }</span>
+										</label>
+									}
+								</div>
+								<span x-show="err" style="display:none" class="help is-danger" x-text="err"></span>
+							</div>
+							<form
+								x-show="editing"
+								style="display:none"
+								hx-patch={ "/admin/fragments/role-groups/" + g.ID }
+								hx-swap="none"
+								hx-on:htmx:after-request="if(event.detail.successful){ const loc=event.detail.xhr.getResponseHeader('HX-Redirect'); if(loc) window.location.href=loc }"
+							>
+								<div class="field is-grouped">
+									<div class="control"><input type="text" name="name" x-model="editName" required class="input is-small"/></div>
+									<div class="control"><input type="text" name="display_name" x-model="editDisplay" placeholder="Display name" class="input is-small"/></div>
+									<div class="control"><input type="text" name="description" x-model="editDesc" placeholder="Description" class="input is-small"/></div>
+									<div class="control"><button type="submit" class="button is-primary is-small">Save</button></div>
+									<div class="control"><button type="button" x-on:click="editing = false" class="button is-small">Cancel</button></div>
+								</div>
+						</form>
+					</div>
+				}
+			</div>
+		}
+		</div>
+		</div>
+	</div>
+	}
+}
+
+func mustJSON(v string) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}

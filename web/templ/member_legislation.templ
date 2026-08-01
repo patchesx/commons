@@ -1,0 +1,118 @@
+package admintempl
+
+import (
+	"fmt"
+	"commons/store"
+)
+
+type MemberLegislationPageData struct {
+	Bodies        []store.LegislativeBody
+	BillsByBody   map[string][]store.Bill
+	Subscriptions map[string]bool
+	Filter        string
+	Search        string
+	Permissions   []string
+	DisplayName   string
+	UnreadCount   int
+	UserID        string
+}
+
+templ MemberLegislationPage(data MemberLegislationPageData) {
+	@PortalLayout("/legislation", "/legislation", data.DisplayName, FilteredPortalNavItems(data.Permissions), data.UnreadCount) {
+		<div class="container" style="max-width: 48rem; padding: 0.5rem 1rem">
+			<div class="is-flex is-justify-content-space-between is-align-items-center is-flex-wrap-wrap mb-4" style="gap: 0.75rem">
+				<h1 class="title is-4 mb-0">Legislation</h1>
+				<div class="is-flex is-flex-wrap-wrap" style="gap: 0.5rem">
+					if len(data.Bodies) > 1 {
+						<div class="select is-small">
+							<select
+								hx-get="/legislation"
+								hx-target="body"
+								hx-push-url="true"
+								hx-include="[name='search']"
+								name="body"
+							>
+								<option value="">All Bodies</option>
+								for _, body := range data.Bodies {
+									<option value={ body.ID } selected?={ body.ID == data.Filter }>{ body.Name }</option>
+								}
+							</select>
+						</div>
+					}
+					<input
+						type="search"
+						name="search"
+						value={ data.Search }
+						placeholder="Search bills..."
+						hx-get="/legislation"
+						hx-target="body"
+						hx-push-url="true"
+						hx-trigger="input changed delay:300ms"
+						hx-include="[name='body']"
+						class="input is-small"
+						style="max-width: 12rem"
+					/>
+				</div>
+			</div>
+			<div id="bills-list">
+				for _, body := range data.Bodies {
+					if bills, ok := data.BillsByBody[body.ID]; ok && len(bills) > 0 {
+						if data.Filter == "" || data.Filter == body.ID {
+							<section class="mb-5">
+								<p class="is-size-7 has-text-weight-semibold has-text-grey mb-3" style="text-transform: uppercase; letter-spacing: 0.05em">{ body.Name }</p>
+								<div class="box p-0">
+									for _, bill := range bills {
+										<div class="px-4 py-3" style="border-bottom: 1px solid var(--bulma-border)">
+											<div class="is-flex is-justify-content-space-between is-align-items-flex-start" style="gap: 0.75rem">
+												<div style="min-width: 0; flex: 1">
+													<div class="is-flex is-align-items-center is-flex-wrap-wrap mb-1" style="gap: 0.5rem">
+														<span class="is-family-monospace is-size-7 has-text-primary">{ bill.Identifier }</span>
+														if bill.Status != nil {
+															<span class="tag is-rounded is-size-7">{ *bill.Status }</span>
+														}
+													</div>
+													<p class="has-text-weight-semibold is-size-6">{ bill.Title }</p>
+													if bill.LatestAction != nil && *bill.LatestAction != "" {
+														<p class="is-size-7 has-text-grey mt-1">{ *bill.LatestAction }</p>
+													}
+												</div>
+												@MemberSubscribeButton(bill.ID, data.Subscriptions[bill.ID])
+											</div>
+										</div>
+									}
+								</div>
+							</section>
+						}
+					}
+				}
+			</div>
+		</div>
+	}
+}
+
+templ MemberSubscribeButton(billID string, subscribed bool) {
+	<button
+		hx-post={ fmt.Sprintf("/api/legislation/subscribe?bill_id=%s", billID) }
+		hx-swap="outerHTML"
+		class={ "button is-ghost is-small px-1", templ.KV("has-text-primary", subscribed), templ.KV("has-text-grey", !subscribed) }
+		title={ memberSubscribeTitle(subscribed) }
+	>
+		<svg width="18" height="18" fill={ memberSubscribeFill(subscribed) } stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+			<path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/>
+		</svg>
+	</button>
+}
+
+func memberSubscribeTitle(subscribed bool) string {
+	if subscribed {
+		return "Unsubscribe from updates"
+	}
+	return "Subscribe to updates"
+}
+
+func memberSubscribeFill(subscribed bool) string {
+	if subscribed {
+		return "currentColor"
+	}
+	return "none"
+}

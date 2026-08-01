@@ -1,0 +1,158 @@
+package admintempl
+
+import (
+	"fmt"
+	"strconv"
+)
+
+type SchedulerJob struct {
+	ID          string
+	Label       string
+	Enabled     bool
+	Minutes     int
+	Description string
+}
+
+func splitMinutesH(total int) int {
+	if total < 0 {
+		return 0
+	}
+	return total / 60
+}
+
+func splitMinutesM(total int) int {
+	if total < 0 {
+		return 0
+	}
+	return total % 60
+}
+
+func schedulerToggleAriaLabel(label string, enabled bool) string {
+	state := "disabled, click to enable"
+	if enabled {
+		state = "enabled, click to disable"
+	}
+	return label + ": " + state
+}
+
+func schedulerIntervalData(displayH, displayM int) string {
+	return fmt.Sprintf(
+		`{ hours: %d, minutes: %d, origH: %d, origM: %d }`,
+		displayH, displayM, displayH, displayM,
+	)
+}
+
+templ SchedulerPage(jobs []SchedulerJob) {
+	@Layout("Job Scheduler", "/admin/scheduler") {
+		<div>
+			<h1 class="title is-4 mb-3">Job Scheduler</h1>
+			@PageHelp() {
+				Control how often background jobs run. Changes take effect at the next scheduled run, without a restart.
+			}
+			<div class="columns is-multiline">
+				for _, job := range jobs {
+					<div class="column is-half">
+						@schedulerCard(job)
+					</div>
+				}
+			</div>
+		</div>
+	}
+}
+
+func schedulerDefaultMinutes(minutes int) int {
+	if minutes == 0 {
+		return 1
+	}
+	return minutes
+}
+
+templ schedulerCard(job SchedulerJob) {
+	@Card(job.Label, SchedulerToggleButton(job.ID, job.Label, job.Enabled)) {
+		@SchedulerIntervalSection(job.ID, job.Label, schedulerDefaultMinutes(job.Minutes), job.Description, "")
+	}
+}
+
+templ SchedulerToggleButton(id, label string, enabled bool) {
+	<button
+		id={ "scheduler-" + id + "-toggle" }
+		hx-patch={ "/admin/fragments/scheduler/" + id + "/toggle" }
+		hx-target={ "#scheduler-" + id + "-toggle" }
+		hx-swap="outerHTML"
+		aria-pressed={ strconv.FormatBool(enabled) }
+		aria-label={ schedulerToggleAriaLabel(label, enabled) }
+		class={ "button is-small is-rounded " + schedulerToggleClass(enabled) }
+	>
+		if enabled {
+			On
+		} else {
+			Off
+		}
+	</button>
+}
+
+func schedulerToggleClass(enabled bool) string {
+	if enabled {
+		return "is-success"
+	}
+	return ""
+}
+
+templ SchedulerIntervalSection(id, label string, displayMinutes int, description, errMsg string) {
+	<div id={ "scheduler-" + id + "-interval" }>
+		<form
+			hx-patch={ "/admin/fragments/scheduler/" + id + "/interval" }
+			hx-target={ "#scheduler-" + id + "-interval" }
+			hx-swap="outerHTML"
+			x-data={ schedulerIntervalData(splitMinutesH(displayMinutes), splitMinutesM(displayMinutes)) }
+		>
+			<p class="is-size-7 has-text-weight-semibold mb-2">Run every</p>
+			<div class="field has-addons">
+				<div class="control">
+					<input
+						type="number"
+						name="hours"
+						min="0"
+						step="1"
+						x-model.number="hours"
+						aria-label={ label + " interval hours" }
+						class="input is-small"
+						style="width: 4.5rem"
+					/>
+				</div>
+				<div class="control">
+					<span class="button is-small is-static">h</span>
+				</div>
+				<div class="control">
+					<input
+						type="number"
+						name="minutes"
+						min="0"
+						max="59"
+						step="1"
+						x-model.number="minutes"
+						aria-label={ label + " interval minutes" }
+						class="input is-small"
+						style="width: 4.5rem"
+					/>
+				</div>
+				<div class="control">
+					<span class="button is-small is-static">m</span>
+				</div>
+				<div class="control">
+					<button
+						type="submit"
+						:disabled="hours === origH && minutes === origM"
+						class="button is-primary is-small"
+					>Save</button>
+				</div>
+			</div>
+			if errMsg != "" {
+				<p role="alert" class="help is-danger">{ errMsg }</p>
+			}
+			if description != "" {
+				<p class="help has-text-grey">{ description }</p>
+			}
+		</form>
+	</div>
+}

@@ -1,0 +1,179 @@
+package admintempl
+
+import "commons/web"
+
+// extraNavItems holds nav items registered by plugins via RegisterNavItem.
+var extraNavItems []SidebarItem
+
+// SetExtraNavItems is called once from main.go after all plugins are initialised.
+func SetExtraNavItems(items []SidebarItem) {
+	extraNavItems = items
+}
+
+func adminNavGroups() []SidebarGroup {
+	groups := []SidebarGroup{
+		{
+			Label: "General",
+			Items: []SidebarItem{
+				{"/admin/docs", "Documentation", ""},
+			},
+		},
+		{
+			Label: "Operations",
+			Items: []SidebarItem{
+				{"/admin/jobs", "Jobs", ""},
+				{"/admin/meetings", "Meetings", ""},
+				{"/admin/work-items", "Work Items", "/admin/fragments/open-work-items-count"},
+				{"/admin/audit", "Audit Log", ""},
+			},
+		},
+		{
+			Label: "Setup",
+			Items: []SidebarItem{
+				{"/admin/integrations", "Integrations", ""},
+				{"/admin/settings", "Settings", ""},
+				{"/admin/triggers", "Triggers", ""},
+				{"/admin/scheduler", "Scheduler", ""},
+				{"/admin/roles", "Roles", ""},
+				{"/admin/app-home", "App Home", ""},
+			},
+		},
+		{
+			Label: "Members",
+			Items: []SidebarItem{
+				{"/admin/users", "Users", ""},
+			},
+		},
+		{
+			Label: "Content",
+			Items: []SidebarItem{
+				{"/admin/resources", "Resources", ""},
+				{"/admin/legislation", "Legislation", ""},
+				{"/admin/calendars", "Calendars", ""},
+			},
+		},
+	}
+	if len(extraNavItems) > 0 {
+		groups = append(groups, SidebarGroup{Label: "Plugins", Items: extraNavItems})
+	}
+	return groups
+}
+
+func appearanceOrgName(cfg web.AppearanceConfig) string {
+	if cfg.OrgName != "" {
+		return cfg.OrgName
+	}
+	return "Admin"
+}
+
+templ adminSidebarHeader() {
+	<div class="px-4 py-4" style="border-bottom: 1px solid rgba(255,255,255,0.1); flex-shrink: 0">
+		if false {
+			<a href="/" class="has-text-grey-light is-size-7 is-block mb-1">← Back to portal</a>
+		}
+		<span class="has-text-white has-text-weight-semibold is-size-5">
+			{ appearanceOrgName(web.AppearanceFromContext(ctx)) }
+		</span>
+	</div>
+}
+
+templ adminSidebarFooter() {
+	<div class="px-4 py-4" style="border-top: 1px solid rgba(255,255,255,0.1); flex-shrink: 0">
+		<a
+			href="/change-password"
+			class="has-text-grey-lighter is-size-7 is-block mb-2"
+		>Change password</a>
+		<button
+			hx-post="/logout"
+			hx-on:htmx:after-request="window.location.href='/login'"
+			x-on:click="open = false"
+			class="button is-ghost has-text-grey-lighter is-size-7 p-0"
+			style="height: auto"
+		>Log out</button>
+	</div>
+}
+
+templ Layout(title string, currentPath string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>{ title } — { appearanceOrgName(web.AppearanceFromContext(ctx)) }</title>
+			<link rel="stylesheet" href={ templ.URL(AssetURL("bulma.min.css")) }/>
+			<link rel="stylesheet" href={ templ.URL(AssetURL("app.css")) }/>
+			<link rel="stylesheet" href={ templ.URL(AssetURL("phosphor-icons.css")) }/>
+			<link rel="stylesheet" href={ templ.URL(AssetURL("phosphor-duotone-icons.css")) }/>
+			if appearance := web.AppearanceFromContext(ctx); appearance.FaviconURL != "" {
+				<link rel="icon" href={ appearance.FaviconURL }/>
+			}
+			<!-- Set data-theme before body renders to avoid flash -->
+			<script>
+				(function(){
+					var mq = window.matchMedia('(prefers-color-scheme: dark)');
+					function apply(dark) {
+						document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+					}
+					apply(mq.matches);
+					mq.addEventListener('change', function(e){ apply(e.matches); });
+				})();
+
+				function slackComposer(opts) {
+					return {
+						tab: 'edit',
+						message: opts.message || '',
+						users: opts.users || {},
+						channels: opts.channels || {},
+						actionType: opts.actionType || '',
+						recipientSlackId: opts.recipientSlackId || '',
+
+						insertMention(text) {
+							const ta = this.$refs.msgTextarea;
+							const start = ta.selectionStart;
+							const end = ta.selectionEnd;
+							this.message = this.message.slice(0, start) + text + this.message.slice(end);
+							this.$nextTick(() => {
+								ta.selectionStart = ta.selectionEnd = start + text.length;
+								ta.focus();
+							});
+						},
+
+						get previewHtml() {
+							const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+							let t = esc(this.message);
+							t = t.replace(/&lt;@\{\{user_id\}\}&gt;/g,
+								'<span class="slack-mention">@Joining Member</span>');
+							const u = this.users;
+							t = t.replace(/&lt;@([A-Z0-9]+)&gt;/g, (_, id) =>
+								'<span class="slack-mention">@' + esc(u[id] || id) + '</span>');
+							const ch = this.channels;
+							t = t.replace(/&lt;#([A-Z0-9]+)&gt;/g, (_, id) =>
+								'<span class="slack-mention">#' + esc(ch[id] || id) + '</span>');
+							t = t.replace(/\*((?:[^*]|\n)+?)\*/g, '<strong>$1</strong>');
+							t = t.replace(/_((?:[^_]|\n)+?)_/g, '<em>$1</em>');
+							t = t.replace(/~((?:[^~]|\n)+?)~/g, '<del>$1</del>');
+							t = t.replace(/`([^`\n]+)`/g, '<code class="slack-code">$1</code>');
+							t = t.replace(/\n/g, '<br>');
+							return t || '<span class="has-text-grey-light" style="font-style:italic">Nothing to preview</span>';
+						}
+					};
+				}
+			</script>
+			<script defer src={ templ.URL(AssetURL("alpine.min.js")) }></script>
+			<script defer src="/.within.website/x/htmx/htmx.js"></script>
+		</head>
+		<body>
+			@SidebarLayout(
+				appearanceOrgName(web.AppearanceFromContext(ctx)),
+				currentPath,
+				adminNavGroups(),
+				adminSidebarHeader(),
+				adminSidebarFooter(),
+			) {
+				<section class="section">
+					{ children... }
+				</section>
+			}
+		</body>
+	</html>
+}

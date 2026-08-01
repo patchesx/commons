@@ -1,0 +1,142 @@
+package admintempl
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"commons/plugin"
+)
+
+// SlackComposerOpts configures the SlackMessageComposer component.
+type SlackComposerOpts struct {
+	FieldName     string
+	InitValue     string
+	UserMap       map[string]string     // slackID → displayName, used for preview rendering
+	Channels      []WHChannel           // channel mention buttons + preview resolution
+	PipelineVars  []plugin.DataFieldDef // {{key}} insertion buttons (webhook pipeline context)
+	ShowInitiator bool                  // show @Joining Member button (inserts <@{{user_id}}>)
+	ShowRecipient bool                  // show @Recipient button (reads recipientSlackId from enclosing scope)
+	Standalone    bool                  // true = wrap in own x-data; false = inherit enclosing scope
+	Placeholder   string
+}
+
+func composerJSONStr(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func composerUsersJSON(m map[string]string) string {
+	if m == nil {
+		return "{}"
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+func composerChannelsJSON(channels []WHChannel) string {
+	m := make(map[string]string, len(channels))
+	for _, ch := range channels {
+		m[ch.ID] = ch.Name
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+func composerXData(opts SlackComposerOpts) string {
+	return fmt.Sprintf(
+		`slackComposer({message:%s,users:%s,channels:%s,actionType:'',recipientSlackId:''})`,
+		composerJSONStr(opts.InitValue),
+		composerUsersJSON(opts.UserMap),
+		composerChannelsJSON(opts.Channels),
+	)
+}
+
+func composerPlaceholder(opts SlackComposerOpts) string {
+	if opts.Placeholder != "" {
+		return opts.Placeholder
+	}
+	return "Your message here…"
+}
+
+// SlackMessageComposer renders a Write/Preview message editor with Slack mention
+// and pipeline variable insertion buttons. When Standalone is true it provides its
+// own x-data scope; otherwise it reads and writes Alpine state from the enclosing scope.
+templ SlackMessageComposer(opts SlackComposerOpts) {
+	if opts.Standalone {
+		<div x-data={ composerXData(opts) }>
+			@slackComposerInner(opts)
+		</div>
+	} else {
+		@slackComposerInner(opts)
+	}
+}
+
+templ slackComposerInner(opts SlackComposerOpts) {
+	<div class="field">
+		<div class="is-flex is-align-items-center mb-1" style="gap: 0.5rem">
+			<label class="label is-small mb-0">Message</label>
+			<div class="tabs is-small mb-0" style="border-bottom: none">
+				<ul style="border-bottom: none">
+					<li :class="tab === 'edit' ? 'is-active' : ''">
+						<a @click.prevent="tab = 'edit'" class="is-size-7">Write</a>
+					</li>
+					<li :class="tab === 'preview' ? 'is-active' : ''">
+						<a @click.prevent="tab = 'preview'" class="is-size-7">Preview</a>
+					</li>
+				</ul>
+			</div>
+		</div>
+		<div class="control" x-show="tab === 'edit'">
+			<textarea
+				x-ref="msgTextarea"
+				x-model="message"
+				name={ opts.FieldName }
+				rows="4"
+				placeholder={ composerPlaceholder(opts) }
+				class="textarea is-small"
+			></textarea>
+		</div>
+		<div
+			x-show="tab === 'preview'"
+			x-html="previewHtml"
+			class="slack-preview"
+			style="display:none"
+		></div>
+		if opts.ShowInitiator || opts.ShowRecipient || len(opts.Channels) > 0 || len(opts.PipelineVars) > 0 {
+			<div class="is-flex is-flex-wrap-wrap is-align-items-center mt-2" style="gap: 0.35rem">
+				<span class="is-size-7 has-text-grey-light">Insert:</span>
+				if opts.ShowInitiator {
+					<button
+						type="button"
+						@click={ `insertMention('<@{{user_id}}>')` }
+						class="button is-small is-link is-light"
+					>{ "@Joining Member" }</button>
+				}
+				if opts.ShowRecipient {
+					<span x-show="actionType === 'send_dm' && recipientSlackId" style="display:none">
+						<button
+							type="button"
+							@click={ `insertMention('<@' + recipientSlackId + '>')` }
+							class="button is-small is-link is-light"
+						>{ "@Recipient" }</button>
+					</span>
+				}
+				for _, ch := range opts.Channels {
+					<button
+						type="button"
+						@click={ fmt.Sprintf("insertMention('<#%s>')", ch.ID) }
+						class="button is-small is-info is-light"
+					>#{ ch.Name }</button>
+				}
+				for _, v := range opts.PipelineVars {
+					<button
+						type="button"
+						class="button is-small is-family-monospace"
+						@click={ fmt.Sprintf("insertMention('{{%s}}')", v.Key) }
+						title={ v.Label + ": " + v.Description }
+					>{ "{{" + v.Key + "}}" }</button>
+				}
+			</div>
+		}
+	</div>
+}

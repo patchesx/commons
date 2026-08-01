@@ -1,0 +1,333 @@
+package admintempl
+
+import (
+	"fmt"
+	"strconv"
+	"time"
+)
+
+// JobView holds the data needed to render a single row in the Jobs table.
+type JobView struct {
+	ID           string
+	Type         string
+	Feature      string
+	Status       string
+	Trigger      string
+	ErrorMessage *string
+	StartedAt    time.Time
+	CompletedAt  *time.Time
+	Summary      string
+}
+
+// JobDetailView holds integration-specific detail for a job.
+type JobDetailView struct {
+	Type string
+	// recording_upload fields
+	MeetingTopic  string
+	MeetingDate   *time.Time
+	DurationMins  int
+	HostEmail     string
+	VideoID       string
+	VideoTitle    string
+	DriveFolderID string
+	// member_sync fields
+	MembersAdded   int
+	MembersUpdated int
+	// openstates_sync fields
+	OpenStateBillsImported int
+	OpenStateBillsUpdated  int
+	OpenStateBillsSkipped  int
+	// legistar_sync fields
+	LegistarBillsImported int
+	LegistarBillsUpdated  int
+	// error message
+	ErrorMessage string
+}
+
+func jobTypeLabel(t string) string {
+	switch t {
+	case "recording_upload":
+		return "Recording Upload"
+	case "pipeline":
+		return "Pipeline"
+	case "member_sync":
+		return "Member Sync"
+	case "openstates_sync":
+		return "OpenStates Sync"
+	case "legistar_sync":
+		return "Legistar Sync"
+	case "zoom_meeting_sync":
+		return "Meeting Sync"
+	default:
+		return t
+	}
+}
+
+func jobTypeColor(t string) string {
+	switch t {
+	case "recording_upload", "pipeline":
+		return "blue"
+	case "member_sync":
+		return "green"
+	case "openstates_sync", "legistar_sync":
+		return "yellow"
+	default:
+		return "gray"
+	}
+}
+
+func jobStatusColor(s string) string {
+	switch s {
+	case "complete":
+		return "green"
+	case "running":
+		return "blue"
+	case "failed":
+		return "red"
+	case "cancelled":
+		return "amber"
+	default:
+		return "gray"
+	}
+}
+
+func jobTriggerColor(t string) string {
+	switch t {
+	case "webhook":
+		return "blue"
+	case "manual":
+		return "amber"
+	default:
+		return "gray"
+	}
+}
+
+func jobCanCancel(status string) bool {
+	return status == "pending" || status == "running"
+}
+
+templ JobsPage(jobs []JobView, total, page, totalPages int, typeFilter, statusFilter string) {
+	@Layout("Jobs", "/admin/jobs") {
+		<div>
+			<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+				<h1 class="title is-4 mb-0">Jobs</h1>
+				<div class="field is-grouped mb-0">
+					<div class="control">
+						<label for="job-type-filter" class="is-sr-only">Filter by type</label>
+						<div class="select is-small">
+							<select
+								id="job-type-filter"
+								name="type"
+								hx-get="/admin/fragments/jobs-table"
+								hx-trigger="change"
+								hx-target="#jobs-table"
+								hx-swap="outerHTML"
+								hx-include="#job-status-filter"
+								hx-on:htmx:after-swap="document.getElementById('jobs-filter-status').textContent = 'Results updated'"
+							>
+								<option value="" selected?={ typeFilter == "" }>All types</option>
+								<option value="recording_upload" selected?={ typeFilter == "recording_upload" }>Recording Upload</option>
+								<option value="member_sync" selected?={ typeFilter == "member_sync" }>Member Sync</option>
+								<option value="openstates_sync" selected?={ typeFilter == "openstates_sync" }>OpenStates Sync</option>
+								<option value="legistar_sync" selected?={ typeFilter == "legistar_sync" }>Legistar Sync</option>
+								<option value="zoom_meeting_sync" selected?={ typeFilter == "zoom_meeting_sync" }>Meeting Sync</option>
+							</select>
+						</div>
+					</div>
+					<div class="control">
+						<label for="job-status-filter" class="is-sr-only">Filter by status</label>
+						<div class="select is-small">
+							<select
+								id="job-status-filter"
+								name="status"
+								hx-get="/admin/fragments/jobs-table"
+								hx-trigger="change"
+								hx-target="#jobs-table"
+								hx-swap="outerHTML"
+								hx-include="#job-type-filter"
+								hx-on:htmx:after-swap="document.getElementById('jobs-filter-status').textContent = 'Results updated'"
+							>
+								<option value="" selected?={ statusFilter == "" }>All statuses</option>
+								<option value="pending" selected?={ statusFilter == "pending" }>Pending</option>
+								<option value="running" selected?={ statusFilter == "running" }>Running</option>
+								<option value="complete" selected?={ statusFilter == "complete" }>Complete</option>
+								<option value="failed" selected?={ statusFilter == "failed" }>Failed</option>
+								<option value="cancelled" selected?={ statusFilter == "cancelled" }>Cancelled</option>
+							</select>
+						</div>
+					</div>
+				</div>
+			</div>
+			@PageHelp() {
+				Background tasks — video uploads, processing jobs, and more. Click a row to expand details. Pending or running jobs can be cancelled from the detail panel.
+			}
+			<span id="jobs-filter-status" role="status" aria-live="polite" class="is-sr-only"></span>
+			@JobsTable(jobs, total, page, totalPages, typeFilter, statusFilter)
+		</div>
+	}
+}
+
+templ JobsTable(jobs []JobView, total, page, totalPages int, typeFilter, statusFilter string) {
+	<div id="jobs-table">
+		<div class="card">
+			<div class="table-container">
+				<table class="table is-fullwidth is-hoverable is-narrow mb-0">
+					<thead>
+						<tr>
+							<th>Type</th>
+							<th class="is-hidden-mobile">Status</th>
+							<th class="is-hidden-mobile">Trigger</th>
+							<th class="is-hidden-mobile">Started</th>
+							<th class="is-hidden-mobile">Summary</th>
+							<th></th>
+						</tr>
+					</thead>
+					if len(jobs) == 0 {
+						<tbody>
+							<tr>
+								<td colspan="6" class="has-text-centered py-6">
+									@EmptyState("No jobs found.")
+								</td>
+							</tr>
+						</tbody>
+					}
+					for _, j := range jobs {
+						<tbody x-data={ `{ open: false, loaded: false }` }>
+							<tr>
+								<td>
+									@StatusBadge(jobTypeLabel(j.Type), jobTypeColor(j.Type))
+									<div class="is-hidden-tablet is-flex is-flex-wrap-wrap mt-1" style="gap: 0.25rem">
+										@StatusBadge(j.Status, jobStatusColor(j.Status))
+										@StatusBadge(j.Trigger, jobTriggerColor(j.Trigger))
+									</div>
+									<div class="is-hidden-tablet is-size-7 has-text-grey mt-1">{ j.StartedAt.Format("Jan 2, 2006 3:04pm") }</div>
+									if j.Summary != "" {
+										<div class="is-hidden-tablet is-size-7 mt-1">{ j.Summary }</div>
+									}
+								</td>
+								<td class="is-hidden-mobile">
+									@StatusBadge(j.Status, jobStatusColor(j.Status))
+								</td>
+								<td class="is-hidden-mobile">
+									@StatusBadge(j.Trigger, jobTriggerColor(j.Trigger))
+								</td>
+								<td class="is-hidden-mobile is-size-7 has-text-grey" style="white-space: nowrap">
+									{ j.StartedAt.Format("Jan 2 3:04pm") }
+								</td>
+								<td class="is-hidden-mobile is-size-7" style="max-width: 20rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+									{ j.Summary }
+								</td>
+								<td class="has-text-right" style="white-space: nowrap">
+									<div class="buttons are-small is-justify-content-flex-end mb-0">
+										if jobCanCancel(j.Status) {
+											<span x-data="{ confirming: false }">
+												<button
+													x-show="!confirming"
+													x-on:click.stop="confirming = true"
+													class="button is-danger is-outlined is-small"
+												>Cancel</button>
+												<span x-show="confirming" style="display:none" class="buttons are-small mb-0">
+													<button
+														x-on:click.stop
+														hx-post={ "/admin/fragments/jobs/" + j.ID + "/cancel" }
+														hx-swap="none"
+														hx-on:htmx:after-request="if(event.detail.successful) htmx.ajax('GET', '/admin/fragments/jobs-table' + window.location.search, {target: '#jobs-table', swap: 'outerHTML'})"
+														class="button is-danger is-small"
+													>Confirm</button>
+													<button x-on:click.stop="confirming = false" class="button is-small">No</button>
+												</span>
+											</span>
+										}
+										<button
+											x-on:click={ `open = !open; if (open && !loaded) { loaded = true; htmx.ajax('GET', '/admin/fragments/jobs/` + j.ID + `/detail', {target: '#jd-` + j.ID + `', swap: 'innerHTML'}) }` }
+											:aria-expanded="open"
+											aria-label={ "Toggle details for " + jobTypeLabel(j.Type) + " started " + j.StartedAt.Format("Jan 2") }
+											class="button is-small"
+										>Details</button>
+									</div>
+								</td>
+							</tr>
+							<tr x-show="open" x-cloak>
+								<td colspan="6" class="has-background-white-ter">
+									<div id={ "jd-" + j.ID }>
+										<span class="is-size-7 has-text-grey is-italic">Loading…</span>
+									</div>
+								</td>
+							</tr>
+						</tbody>
+					}
+				</table>
+			</div>
+			@PaginationNav(page, totalPages,
+				fmt.Sprintf("/admin/fragments/jobs-table?page=%d&type=%s&status=%s", page-1, typeFilter, statusFilter),
+				fmt.Sprintf("/admin/fragments/jobs-table?page=%d&type=%s&status=%s", page+1, typeFilter, statusFilter),
+				"jobs-table") {
+				<span class="is-size-7 has-text-grey">{ strconv.Itoa(total) } total</span>
+			}
+		</div>
+	</div>
+}
+
+templ JobDetailFragment(d JobDetailView) {
+	<dl class="columns is-multiline is-mobile is-size-7 mb-0">
+		if d.ErrorMessage != "" {
+			<div class="column is-full">
+				@AlertBox(d.ErrorMessage, "error")
+			</div>
+		}
+		if d.Type == "recording_upload" || d.Type == "pipeline" {
+			if d.MeetingTopic != "" {
+				<dt class="column is-one-third has-text-grey">Meeting</dt>
+				<dd class="column has-text-weight-semibold">{ d.MeetingTopic }</dd>
+			}
+			if d.MeetingDate != nil {
+				<dt class="column is-one-third has-text-grey">Date</dt>
+				<dd class="column">{ d.MeetingDate.Format("Jan 2, 2006") }</dd>
+			}
+			if d.DurationMins > 0 {
+				<dt class="column is-one-third has-text-grey">Duration</dt>
+				<dd class="column">{ strconv.Itoa(d.DurationMins) } min</dd>
+			}
+			if d.HostEmail != "" {
+				<dt class="column is-one-third has-text-grey">Host</dt>
+				<dd class="column">{ d.HostEmail }</dd>
+			}
+			if d.VideoTitle != "" {
+				<dt class="column is-one-third has-text-grey">YouTube</dt>
+				<dd class="column">
+					if d.VideoID != "" {
+						<a href={ templ.URL("https://www.youtube.com/watch?v=" + d.VideoID) } target="_blank" class="has-text-link">{ d.VideoTitle }</a>
+					} else {
+						{ d.VideoTitle }
+					}
+				</dd>
+			}
+			if d.DriveFolderID != "" {
+				<dt class="column is-one-third has-text-grey">Drive</dt>
+				<dd class="column">
+					<a href={ templ.URL("https://drive.google.com/drive/folders/" + d.DriveFolderID) } target="_blank" class="has-text-link">View folder</a>
+				</dd>
+			}
+		}
+		if d.Type == "member_sync" {
+			<dt class="column is-one-third has-text-grey">Members added</dt>
+			<dd class="column">{ strconv.Itoa(d.MembersAdded) }</dd>
+			<dt class="column is-one-third has-text-grey">Members updated</dt>
+			<dd class="column">{ strconv.Itoa(d.MembersUpdated) }</dd>
+		}
+		if d.Type == "openstates_sync" {
+			<dt class="column is-one-third has-text-grey">Bills imported</dt>
+			<dd class="column">{ strconv.Itoa(d.OpenStateBillsImported) }</dd>
+			<dt class="column is-one-third has-text-grey">Bills updated</dt>
+			<dd class="column">{ strconv.Itoa(d.OpenStateBillsUpdated) }</dd>
+			<dt class="column is-one-third has-text-grey">Bills skipped</dt>
+			<dd class="column">{ strconv.Itoa(d.OpenStateBillsSkipped) }</dd>
+		}
+		if d.Type == "legistar_sync" {
+			<dt class="column is-one-third has-text-grey">Bills imported</dt>
+			<dd class="column">{ strconv.Itoa(d.LegistarBillsImported) }</dd>
+			<dt class="column is-one-third has-text-grey">Bills updated</dt>
+			<dd class="column">{ strconv.Itoa(d.LegistarBillsUpdated) }</dd>
+		}
+	</dl>
+}

@@ -1,0 +1,42 @@
+package admintempl
+
+templ ReportIssueForm(success bool) {
+	<div class="box">
+		<h2 class="title is-5 mb-4">Report an Issue</h2>
+		if success {
+			<div class="notification is-success mb-4">
+				Your issue has been submitted. Thank you!
+			</div>
+		}
+		<form
+			hx-post="/fragments/report-issue"
+			hx-target="closest div"
+			hx-swap="outerHTML"
+		>
+			<div class="field mb-4">
+				<label class="label is-small">Type</label>
+				<div class="control">
+					<div class="select is-small is-fullwidth">
+						<select name="type" required>
+							<option value="issue">Bug Report</option>
+							<option value="feature_request">Feature Request</option>
+						</select>
+					</div>
+				</div>
+			</div>
+			<div class="field mb-4">
+				<label class="label is-small">Title</label>
+				<div class="control">
+					<input type="text" name="title" required class="input is-small"/>
+				</div>
+			</div>
+			<div class="field mb-5">
+				<label class="label is-small">Description <span class="has-text-grey has-text-weight-normal">(optional)</span></label>
+				<div class="control">
+					<textarea name="description" rows="4" class="textarea is-small"></textarea>
+				</div>
+			</div>
+			<button type="submit" class="button is-primary is-fullwidth">Submit</button>
+		</form>
+	</div>
+}

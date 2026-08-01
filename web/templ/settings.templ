@@ -1,0 +1,474 @@
+package admintempl
+
+import (
+	"fmt"
+	"strconv"
+
+	"commons/store"
+)
+
+type FeatureConfigEntry struct {
+	Key         string
+	Label       string
+	Description string
+	Value       string
+	Configured  bool
+}
+
+type SettingsPageData struct {
+	BaseURL              ConfigEntryView
+	MeetingEntries      []FeatureConfigEntry
+	CalendarCount       int
+	DefaultCalendarID   string
+	Calendars           []store.Calendar
+	TrackedBills        int
+	RecentBillUpdates   int
+	NotificationRouting string
+	AllowRegistration   bool
+	DefaultGroupID      string
+	Groups              []GroupRef
+	PortalEnabled       bool
+	HasZoom              bool
+	StorageLocations     []store.StorageLocation
+	StorageIntegrationID string
+	ExtraCardPaths       []string
+}
+
+templ generalCard(baseURL ConfigEntryView) {
+	@Card("General", nil) {
+		@textConfigRow("app", baseURL, false)
+	}
+}
+
+templ SettingsPage(data SettingsPageData) {
+	@Layout("Settings", "/admin/settings") {
+		<h1 class="title is-4 mb-3">Settings</h1>
+		@PageHelp() {
+			Configure platform behavior, member access, and notification settings.
+		}
+		<div class="mb-5">
+			<p class="is-size-7 has-text-weight-semibold has-text-grey-dark mb-3" style="text-transform: uppercase; letter-spacing: 0.05em">General</p>
+			<div class="columns is-multiline">
+				<div class="column is-half">
+					@generalCard(data.BaseURL)
+				</div>
+				if data.HasZoom {
+					<div class="column is-half">
+						@meetingSchedulingCard(data.MeetingEntries)
+					</div>
+				}
+			</div>
+		</div>
+		<div>
+			<p class="is-size-7 has-text-weight-semibold has-text-grey-dark mb-3" style="text-transform: uppercase; letter-spacing: 0.05em">Platform</p>
+			<div class="columns is-multiline">
+				<div class="column is-half">
+					@calendarFeatureCard(data.CalendarCount, data.Calendars, data.DefaultCalendarID)
+				</div>
+				<div class="column is-half">
+					@legislationFeatureCard(data.TrackedBills, data.RecentBillUpdates)
+				</div>
+				<div class="column is-half">
+					@notificationsFeatureCard(data.NotificationRouting)
+				</div>
+				<div class="column is-half">
+					@memberAccessCard(data.AllowRegistration, data.DefaultGroupID, data.Groups)
+				</div>
+				<div class="column is-half">
+					@portalCard(data.PortalEnabled)
+				</div>
+				if data.StorageIntegrationID != "" {
+					<div class="column is-half">
+						@StorageLocationsCard(data.StorageIntegrationID, data.StorageLocations)
+					</div>
+				}
+				for _, path := range data.ExtraCardPaths {
+					<div class="column is-half">
+						<div
+							hx-get={ path }
+							hx-trigger="load"
+							hx-swap="outerHTML"
+						></div>
+					</div>
+				}
+			</div>
+		</div>
+	}
+}
+
+templ featureTag() {
+	<span class="tag is-rounded">Feature</span>
+}
+
+templ meetingSchedulingCard(entries []FeatureConfigEntry) {
+	<div class="box" x-data={ meetingSchedulingData(entries) }>
+		<div class="is-flex is-justify-content-space-between is-align-items-center mb-4">
+			<h2 class="title is-6 mb-0">Meeting Scheduling</h2>
+			@featureTag()
+		</div>
+		<span role="alert" x-show="errMsg" x-text="errMsg" class="help is-danger mb-3" style="display:none"></span>
+		<div class="field">
+			<label class="label is-small">{ meetingEntryLabel(entries, "max_scheduled", "Maximum Scheduled Events") }</label>
+			<div class="field has-addons">
+				<div class="control">
+					<input
+						type="number"
+						min="0"
+						step="1"
+						x-model="maxSched"
+						class="input is-small"
+						style="width: 6rem"
+					/>
+				</div>
+				<div class="control">
+					<button
+						x-on:click="saveField('max_scheduled', maxSched)"
+						:disabled="saving || maxSched == origMaxSched"
+						class="button is-primary is-small"
+					>Save</button>
+				</div>
+			</div>
+			if desc := meetingEntryDesc(entries, "max_scheduled"); desc != "" {
+				<p class="help has-text-grey">{ desc }</p>
+			}
+		</div>
+		<div class="field is-flex is-justify-content-space-between is-align-items-center" style="gap: 1rem">
+			<div style="flex: 1">
+				<label class="label is-small mb-0">{ meetingEntryLabel(entries, "allow_overlap", "Allow Overlapping Meetings") }</label>
+				if desc := meetingEntryDesc(entries, "allow_overlap"); desc != "" {
+					<p class="help has-text-grey">{ desc }</p>
+				}
+			</div>
+			<button
+				:aria-pressed="allowOverlap === 'true'"
+				aria-label="Toggle allow overlapping meetings"
+				x-on:click="toggleOverlap()"
+				:disabled="saving"
+				:class="allowOverlap === 'true' ? 'is-success' : ''"
+				class="button is-small is-rounded"
+				x-text="allowOverlap === 'true' ? 'On' : 'Off'"
+			></button>
+		</div>
+		<div class="field">
+			<label class="label is-small">{ meetingEntryLabel(entries, "max_overlap", "Maximum Concurrent Events") }</label>
+			<div class="field has-addons">
+				<div class="control">
+					<input
+						type="number"
+						min="0"
+						step="1"
+						x-model="maxOverlap"
+						:disabled="allowOverlap !== 'true' || saving"
+						class="input is-small"
+						style="width: 6rem"
+					/>
+				</div>
+				<div class="control">
+					<button
+						x-on:click="saveField('max_overlap', maxOverlap)"
+						:disabled="saving || allowOverlap !== 'true' || maxOverlap == origMaxOverlap"
+						class="button is-primary is-small"
+					>Save</button>
+				</div>
+			</div>
+			if desc := meetingEntryDesc(entries, "max_overlap"); desc != "" {
+				<p class="help has-text-grey">{ desc }</p>
+			}
+		</div>
+	</div>
+}
+
+func meetingSchedulingData(entries []FeatureConfigEntry) string {
+	maxSched := featureEntryValue(entries, "max_scheduled")
+	allowOverlap := featureEntryValue(entries, "allow_overlap")
+	maxOverlap := featureEntryValue(entries, "max_overlap")
+	return fmt.Sprintf(`{
+  maxSched: '%s', origMaxSched: '%s',
+  allowOverlap: '%s',
+  maxOverlap: '%s', origMaxOverlap: '%s',
+  saving: false, errMsg: '',
+  async saveField(key, val) {
+    this.saving = true; this.errMsg = '';
+    try {
+      const r = await fetch('/api/config/meetings/' + key, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({value: String(val)}) });
+      if (!r.ok) throw new Error('Save failed');
+      if (key === 'max_scheduled') this.origMaxSched = val;
+      if (key === 'max_overlap') this.origMaxOverlap = val;
+    } catch { this.errMsg = 'Failed to save' } finally { this.saving = false; }
+  },
+  async toggleOverlap() {
+    const newVal = this.allowOverlap === 'true' ? 'false' : 'true';
+    this.saving = true;
+    try {
+      const r = await fetch('/api/config/meetings/allow_overlap', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({value: newVal}) });
+      if (r.ok) this.allowOverlap = newVal;
+    } catch {} finally { this.saving = false; }
+  }
+}`, maxSched, maxSched, allowOverlap, maxOverlap, maxOverlap)
+}
+
+func featureEntryValue(entries []FeatureConfigEntry, key string) string {
+	for _, e := range entries {
+		if e.Key == key {
+			return e.Value
+		}
+	}
+	return ""
+}
+
+func meetingEntryLabel(entries []FeatureConfigEntry, key, fallback string) string {
+	for _, e := range entries {
+		if e.Key == key && e.Label != "" {
+			return e.Label
+		}
+	}
+	return fallback
+}
+
+func meetingEntryDesc(entries []FeatureConfigEntry, key string) string {
+	for _, e := range entries {
+		if e.Key == key {
+			return e.Description
+		}
+	}
+	return ""
+}
+
+templ calendarFeatureCard(calCount int, calendars []store.Calendar, defaultCalID string) {
+	@Card("Calendar", featureTag()) {
+		<p class="mb-3">
+			<span class="title is-5">{ strconv.Itoa(calCount) }</span>
+			<span class="is-size-7 has-text-grey ml-1">calendars</span>
+		</p>
+		if len(calendars) > 0 {
+			<div class="field mb-4">
+				<label class="label is-small">Default Calendar</label>
+				<div class="field has-addons">
+					<div class="control is-expanded">
+						<div class="select is-small is-fullwidth">
+							<select id="default-calendar-select" name="default_calendar_id">
+								<option value="">— None —</option>
+								for _, cal := range calendars {
+									<option
+										value={ cal.ID }
+										if cal.ID == defaultCalID { selected }
+									>{ cal.Name }</option>
+								}
+							</select>
+						</div>
+					</div>
+					<div class="control">
+						<button
+							hx-patch="/admin/fragments/settings/default-calendar"
+							hx-include="#default-calendar-select"
+							hx-swap="none"
+							hx-on:htmx:after-request="if(event.detail.successful){ const s=document.getElementById('default-cal-status'); s.textContent='Saved'; setTimeout(()=>s.textContent='',3000) }"
+							class="button is-primary is-small"
+						>Save</button>
+					</div>
+				</div>
+				<p class="help has-text-grey">Shown to members who haven't chosen a calendar yet.</p>
+				<span id="default-cal-status" class="help is-success"></span>
+			</div>
+		}
+		<div class="is-flex is-justify-content-flex-end">
+			<a href="/admin/calendars" class="button is-link is-outlined is-small">Manage Calendars</a>
+		</div>
+	}
+}
+
+templ legislationFeatureCard(trackedBills, recentUpdates int) {
+	@Card("Legislation Sync", featureTag()) {
+		<div class="is-flex" style="gap: 2rem; margin-bottom: 1rem">
+			<div>
+				<span class="title is-5">{ strconv.Itoa(trackedBills) }</span>
+				<span class="is-size-7 has-text-grey ml-1">tracked bills</span>
+			</div>
+			<div>
+				<span class="title is-5">{ strconv.Itoa(recentUpdates) }</span>
+				<span class="is-size-7 has-text-grey ml-1">recent updates</span>
+			</div>
+		</div>
+		<div class="is-flex is-justify-content-flex-end">
+			<a href="/admin/legislation" class="button is-link is-outlined is-small">Manage Legislation</a>
+		</div>
+	}
+}
+
+templ notificationsFeatureCard(routing string) {
+	<div class="box" x-data={ notificationsData(routing) }>
+		<div class="is-flex is-justify-content-space-between is-align-items-center mb-4">
+			<h2 class="title is-6 mb-0">Notifications</h2>
+			@featureTag()
+		</div>
+		<span role="alert" x-show="errMsg" x-text="errMsg" class="help is-danger mb-3" style="display:none"></span>
+		<fieldset>
+			<legend class="label is-small mb-2">Notification Routing</legend>
+			<p class="is-size-7 has-text-grey mb-3">
+				Where notifications are delivered when events occur (bill updates, job completions, work item changes).
+			</p>
+			<div class="mb-2">
+				<label class="is-flex is-align-items-flex-start" style="gap: 0.75rem; cursor: pointer">
+					<input
+						type="radio"
+						name="notification-routing"
+						value="web_and_chat"
+						x-model="routing"
+						x-on:change="save()"
+						class="mt-1"
+					/>
+					<div>
+						<span class="has-text-weight-semibold is-size-6">Web + Chat</span>
+						<p class="is-size-7 has-text-grey">Portal inbox and Slack DMs</p>
+					</div>
+				</label>
+			</div>
+			<div>
+				<label class="is-flex is-align-items-flex-start" style="gap: 0.75rem; cursor: pointer">
+					<input
+						type="radio"
+						name="notification-routing"
+						value="web_only"
+						x-model="routing"
+						x-on:change="save()"
+						class="mt-1"
+					/>
+					<div>
+						<span class="has-text-weight-semibold is-size-6">Web only</span>
+						<p class="is-size-7 has-text-grey">Portal inbox only — no Slack DMs</p>
+					</div>
+				</label>
+			</div>
+		</fieldset>
+	</div>
+}
+
+func notificationsData(routing string) string {
+	if routing == "" {
+		routing = "web_and_chat"
+	}
+	return fmt.Sprintf(`{ routing: '%s', errMsg: '',
+  async save() {
+    try {
+      const r = await fetch('/api/config/notifications/routing', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({value: this.routing}) });
+      if (!r.ok) this.errMsg = 'Failed to save';
+    } catch { this.errMsg = 'Failed to save' }
+  }
+}`, routing)
+}
+
+templ memberAccessCard(allowRegistration bool, defaultGroupID string, groups []GroupRef) {
+	<div class="box" x-data={ memberAccessData(allowRegistration, defaultGroupID) }>
+		<div class="is-flex is-justify-content-space-between is-align-items-center mb-4">
+			<h2 class="title is-6 mb-0">Member Access</h2>
+			@featureTag()
+		</div>
+		<span role="alert" x-show="errMsg" x-text="errMsg" class="help is-danger mb-3" style="display:none"></span>
+		<div class="field is-flex is-justify-content-space-between is-align-items-center mb-4" style="gap: 1rem">
+			<div style="flex: 1">
+				<label class="label is-small mb-0">Allow Self-Registration</label>
+				<p class="is-size-7 has-text-grey">
+					When enabled, anyone with the link can create an account at <code>/register</code>.
+				</p>
+			</div>
+			<button
+				role="switch"
+				:aria-checked="allowReg"
+				aria-label="Toggle self-registration"
+				:disabled="saving"
+				x-on:click="toggleReg()"
+				:class="allowReg ? 'is-success' : ''"
+				class="button is-small is-rounded"
+				x-text="allowReg ? 'On' : 'Off'"
+			></button>
+		</div>
+		<div class="field">
+			<label for="default-group-select" class="label is-small">Default Member Group</label>
+			<p class="is-size-7 has-text-grey mb-2">Role group assigned automatically to new self-registered users.</p>
+			<div class="control">
+				<div class="select is-small is-fullwidth">
+					<select
+						id="default-group-select"
+						x-model="defaultGroup"
+						:disabled="saving"
+						x-on:change="saveDefaultGroup($event.target.value)"
+					>
+						<option value="">— None (admin assigns later) —</option>
+						for _, g := range groups {
+							<option value={ g.ID } selected?={ g.ID == defaultGroupID }>{ groupLabel(g.Name, g.DisplayName) }</option>
+						}
+					</select>
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+func memberAccessData(allowReg bool, defaultGroupID string) string {
+	allowStr := "false"
+	if allowReg {
+		allowStr = "true"
+	}
+	return fmt.Sprintf(`{ allowReg: %s, defaultGroup: '%s', saving: false, errMsg: '',
+  async toggleReg() {
+    this.saving = true; this.errMsg = '';
+    const newVal = !this.allowReg;
+    try {
+      const r = await fetch('/api/config/auth/allow_registration', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({value: newVal ? 'true' : 'false'}) });
+      if (r.ok) this.allowReg = newVal; else this.errMsg = 'Failed to save';
+    } catch { this.errMsg = 'Failed to save' } finally { this.saving = false; }
+  },
+  async saveDefaultGroup(val) {
+    this.saving = true; this.errMsg = '';
+    try {
+      const r = await fetch('/api/config/auth/default_group_id', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({value: val}) });
+      if (!r.ok) this.errMsg = 'Failed to save';
+    } catch { this.errMsg = 'Failed to save' } finally { this.saving = false; }
+  }
+}`, allowStr, defaultGroupID)
+}
+
+templ portalCard(enabled bool) {
+	<div class="box" x-data={ portalCardData(enabled) }>
+		<div class="is-flex is-justify-content-space-between is-align-items-center mb-4">
+			<h2 class="title is-6 mb-0">Member Portal</h2>
+			@featureTag()
+		</div>
+		<span role="alert" x-show="errMsg" x-text="errMsg" class="help is-danger mb-3" style="display:none"></span>
+		<div class="field is-flex is-justify-content-space-between is-align-items-center" style="gap: 1rem">
+			<div style="flex: 1">
+				<label class="label is-small mb-0">Enable Member Portal</label>
+				<p class="is-size-7 has-text-grey">
+					When enabled, the root URL shows the member-facing portal and login redirects there by default.
+				</p>
+			</div>
+			<button
+				role="switch"
+				:aria-checked="portalEnabled"
+				aria-label="Toggle member portal"
+				:disabled="saving"
+				x-on:click="toggle()"
+				:class="portalEnabled ? 'is-success' : ''"
+				class="button is-small is-rounded"
+				x-text="portalEnabled ? 'On' : 'Off'"
+			></button>
+		</div>
+	</div>
+}
+
+func portalCardData(enabled bool) string {
+	val := "false"
+	if enabled {
+		val = "true"
+	}
+	return fmt.Sprintf(`{ portalEnabled: %s, saving: false, errMsg: '',
+  async toggle() {
+    this.saving = true; this.errMsg = '';
+    const newVal = !this.portalEnabled;
+    try {
+      const r = await fetch('/api/config/portal/enabled', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({value: newVal ? 'true' : 'false'}) });
+      if (r.ok) this.portalEnabled = newVal; else this.errMsg = 'Failed to save';
+    } catch { this.errMsg = 'Failed to save' } finally { this.saving = false; }
+  }
+}`, val)
+}

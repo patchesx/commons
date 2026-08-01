@@ -1,0 +1,223 @@
+package admintempl
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"commons/store"
+)
+
+func workItemStatusColor(s string) string {
+	switch s {
+	case "open":
+		return "red"
+	case "acknowledged":
+		return "yellow"
+	case "in_progress":
+		return "blue"
+	case "resolved":
+		return "green"
+	default:
+		return "gray"
+	}
+}
+
+func workItemTypeLabel(t string) string {
+	switch t {
+	case "issue":
+		return "Issue"
+	case "feature_request":
+		return "Feature Request"
+	default:
+		return t
+	}
+}
+
+func workItemAlpineData(item store.WorkItem) string {
+	notes := ""
+	if item.AdminNotes != nil {
+		notes = *item.AdminNotes
+	}
+	statusJSON, _ := json.Marshal(item.Status)
+	notesJSON, _ := json.Marshal(notes)
+	return fmt.Sprintf(`{ status: %s, notes: %s, origStatus: %s, origNotes: %s }`,
+		string(statusJSON), string(notesJSON), string(statusJSON), string(notesJSON))
+}
+
+templ WorkItemsPage(items []store.WorkItem, statusFilter, typeFilter string) {
+	@Layout("Work Items", "/admin/work-items") {
+		<div>
+			<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+				<h1 class="title is-4 mb-0">Work Items</h1>
+				<div class="is-flex" style="gap: 0.5rem">
+					<label for="wi-type-filter" class="is-sr-only">Filter by type</label>
+					<div class="select is-small">
+						<select
+							id="wi-type-filter"
+							name="type"
+							hx-get="/admin/fragments/work-items-table"
+							hx-trigger="change"
+							hx-target="#work-items-table"
+							hx-swap="outerHTML"
+							hx-include="#wi-status-filter"
+						>
+							<option value="" selected?={ typeFilter == "" }>All types</option>
+							<option value="issue" selected?={ typeFilter == "issue" }>Issue</option>
+							<option value="feature_request" selected?={ typeFilter == "feature_request" }>Feature Request</option>
+						</select>
+					</div>
+					<label for="wi-status-filter" class="is-sr-only">Filter by status</label>
+					<div class="select is-small">
+						<select
+							id="wi-status-filter"
+							name="status"
+							hx-get="/admin/fragments/work-items-table"
+							hx-trigger="change"
+							hx-target="#work-items-table"
+							hx-swap="outerHTML"
+							hx-include="#wi-type-filter"
+						>
+							<option value="" selected?={ statusFilter == "" }>All statuses</option>
+							<option value="open" selected?={ statusFilter == "open" }>Open</option>
+							<option value="acknowledged" selected?={ statusFilter == "acknowledged" }>Acknowledged</option>
+							<option value="in_progress" selected?={ statusFilter == "in_progress" }>In Progress</option>
+							<option value="resolved" selected?={ statusFilter == "resolved" }>Resolved</option>
+							<option value="closed" selected?={ statusFilter == "closed" }>Closed</option>
+						</select>
+					</div>
+				</div>
+			</div>
+			@PageHelp() {
+				Manual tasks flagged for admin attention — issues and feature requests from members. Update status and notes to track progress.
+			}
+			@WorkItemsTable(items)
+		</div>
+		<dialog id="work-items-modal" aria-labelledby="work-items-modal-title"></dialog>
+	}
+}
+
+templ WorkItemsTable(items []store.WorkItem) {
+	<div id="work-items-table">
+		<div class="card">
+			<div class="table-container">
+				<table class="table is-fullwidth is-hoverable is-narrow mb-0">
+					<thead>
+						<tr>
+							<th>Title</th>
+							<th class="is-hidden-mobile">Type</th>
+							<th class="is-hidden-mobile">Status</th>
+							<th class="is-hidden-mobile">Requester</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(items) == 0 {
+							<tr>
+								<td colspan="5" class="has-text-centered py-5">
+									@EmptyState("No work items found.")
+								</td>
+							</tr>
+						}
+						for _, item := range items {
+							<tr>
+								<td>
+									<div class="has-text-weight-semibold">{ item.Title }</div>
+									<div class="is-size-7 has-text-grey">{ item.CreatedAt.Format("Jan 2, 2006") }</div>
+									<div class="is-hidden-tablet mt-1 is-flex is-flex-wrap-wrap" style="gap: 0.25rem">
+										@StatusBadge(workItemTypeLabel(item.Type), "gray")
+										@StatusBadge(item.Status, workItemStatusColor(item.Status))
+									</div>
+									<div class="is-hidden-tablet is-size-7 has-text-grey">{ item.RequesterName }</div>
+								</td>
+								<td class="is-hidden-mobile">
+									@StatusBadge(workItemTypeLabel(item.Type), "gray")
+								</td>
+								<td class="is-hidden-mobile">
+									@StatusBadge(item.Status, workItemStatusColor(item.Status))
+								</td>
+								<td class="is-hidden-mobile is-size-7 has-text-grey">{ item.RequesterName }</td>
+								<td class="has-text-right">
+									<button
+										hx-get={ "/admin/fragments/work-items/" + item.ID + "/detail-modal" }
+										hx-target="#work-items-modal"
+										hx-swap="innerHTML"
+										hx-on:htmx:after-request="document.getElementById('work-items-modal').showModal()"
+										class="button is-small"
+									>View</button>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+}
+
+templ WorkItemDetailModal(item store.WorkItem, errMsg string) {
+	<div class="box" x-data={ workItemAlpineData(item) }>
+		<h2 id="work-items-modal-title" class="title is-5 mb-2">{ item.Title }</h2>
+		<div class="is-flex mb-3" style="gap: 0.5rem">
+			@StatusBadge(workItemTypeLabel(item.Type), "gray")
+			@StatusBadge(item.Status, workItemStatusColor(item.Status))
+		</div>
+		<p class="is-size-7 has-text-grey mb-3">
+			Submitted by { item.RequesterName } on { item.CreatedAt.Format("Jan 2, 2006") }
+			if item.ResolvedByName != nil && *item.ResolvedByName != "" {
+				· Resolved by { *item.ResolvedByName }
+			}
+		</p>
+		if item.Description != nil && *item.Description != "" {
+			<p class="is-size-6 mb-4" style="white-space: pre-wrap">{ *item.Description }</p>
+		}
+		@AlertBox(errMsg, "error")
+		<form
+			hx-patch={ "/admin/fragments/work-items/" + item.ID }
+			hx-target="#work-items-modal"
+			hx-swap="innerHTML"
+		>
+			<div class="field">
+				<label for="wi-edit-status" class="label is-small">Status</label>
+				<div class="control">
+					<div class="select is-small is-fullwidth">
+						<select id="wi-edit-status" name="status" x-model="status">
+							<option value="open">Open</option>
+							<option value="acknowledged">Acknowledged</option>
+							<option value="in_progress">In Progress</option>
+							<option value="resolved">Resolved</option>
+							<option value="closed">Closed</option>
+						</select>
+					</div>
+				</div>
+			</div>
+			<div class="field">
+				<label for="wi-edit-notes" class="label is-small">Admin notes</label>
+				<div class="control">
+					<textarea
+						id="wi-edit-notes"
+						name="admin_notes"
+						rows="3"
+						x-model="notes"
+						class="textarea is-small"
+					></textarea>
+				</div>
+			</div>
+			<div class="field is-grouped is-grouped-right">
+				<div class="control">
+					<button
+						type="button"
+						onclick="document.getElementById('work-items-modal').close()"
+						class="button"
+					>Close</button>
+				</div>
+				<div class="control">
+					<button
+						type="submit"
+						:disabled="status === origStatus && notes === origNotes"
+						class="button is-primary"
+					>Save</button>
+				</div>
+			</div>
+		</form>
+	</div>
+}

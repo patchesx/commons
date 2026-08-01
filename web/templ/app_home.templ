@@ -1,0 +1,358 @@
+package admintempl
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+
+	"commons/store"
+)
+
+type AppHomePageData struct {
+	BotEntries []ConfigEntryView
+	Links      []store.QuickLink
+	Contacts   []store.Contact
+	Users      []store.User
+}
+
+func quickLinkRowData(l store.QuickLink) string {
+	id, _ := json.Marshal(l.ID)
+	label, _ := json.Marshal(l.Label)
+	url, _ := json.Marshal(l.URL)
+	active := "false"
+	if l.Active {
+		active = "true"
+	}
+	return fmt.Sprintf(`{
+  id: %s,
+  editing: false, saving: false, errMsg: '',
+  label: %s, url: %s, position: %d, active: %s,
+  origLabel: %s, origUrl: %s, origPos: %d, origActive: %s,
+  async save() {
+    this.saving = true; this.errMsg = '';
+    try {
+      const r = await fetch('/api/quick-links/' + this.id, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({label: this.label, url: this.url, position: this.position, active: this.active}) });
+      if (!r.ok) { this.errMsg = 'Failed to save'; return; }
+      this.editing = false;
+      this.origLabel = this.label; this.origUrl = this.url; this.origPos = this.position; this.origActive = this.active;
+      htmx.ajax('GET', '/admin/fragments/app-home/links-list', { target: '#quick-links-list', swap: 'outerHTML' });
+    } catch { this.errMsg = 'Failed to save'; } finally { this.saving = false; }
+  },
+  async del() {
+    this.errMsg = '';
+    try {
+      const r = await fetch('/api/quick-links/' + this.id, { method: 'DELETE' });
+      if (r.ok) { htmx.ajax('GET', '/admin/fragments/app-home/links-list', { target: '#quick-links-list', swap: 'outerHTML' }); }
+      else { this.errMsg = 'Failed to delete'; }
+    } catch { this.errMsg = 'Failed to delete'; }
+  }
+}`, id, label, url, l.Position, active, label, url, l.Position, active)
+}
+
+func contactRowData(c store.Contact) string {
+	id, _ := json.Marshal(c.ID)
+	title, _ := json.Marshal(c.Title)
+	return fmt.Sprintf(`{
+  id: %s,
+  editing: false, saving: false, errMsg: '',
+  title: %s, position: %d,
+  origTitle: %s, origPos: %d,
+  async save() {
+    this.saving = true; this.errMsg = '';
+    try {
+      const r = await fetch('/api/contacts/' + this.id, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({title: this.title, position: this.position}) });
+      if (!r.ok) { this.errMsg = 'Failed to save'; return; }
+      this.editing = false;
+      this.origTitle = this.title; this.origPos = this.position;
+      htmx.ajax('GET', '/admin/fragments/app-home/contacts-list', { target: '#contacts-list', swap: 'outerHTML' });
+    } catch { this.errMsg = 'Failed to save'; } finally { this.saving = false; }
+  },
+  async del() {
+    this.errMsg = '';
+    try {
+      const r = await fetch('/api/contacts/' + this.id, { method: 'DELETE' });
+      if (r.ok) { htmx.ajax('GET', '/admin/fragments/app-home/contacts-list', { target: '#contacts-list', swap: 'outerHTML' }); }
+      else { this.errMsg = 'Failed to delete'; }
+    } catch { this.errMsg = 'Failed to delete'; }
+  }
+}`, id, title, c.Position, title, c.Position)
+}
+
+templ quickLinksAddBtn() {
+	<button
+		x-on:click="addOpen = !addOpen"
+		:aria-expanded="addOpen"
+		class="button is-primary is-small"
+	>+ Add Link</button>
+}
+
+templ contactsAddBtn() {
+	<button
+		x-on:click="addOpen = !addOpen"
+		:aria-expanded="addOpen"
+		class="button is-primary is-small"
+	>+ Add Contact</button>
+}
+
+templ AppHomePage(data AppHomePageData) {
+	@Layout("App Home", "/admin/app-home") {
+		<h1 class="title is-4 mb-1">App Home</h1>
+		@PageHelp() {
+			Manage what members see in the Slack App Home — quick access links and key contacts.
+		}
+		<div class="mb-5">
+			@SectionedCard("Bot Display", nil) {
+				<p class="px-4 pt-3 pb-1 is-size-7 has-text-grey">
+					Customize how the bot appears in the Slack App Home. Unset values fall back to the defaults shown in each description.
+				</p>
+				@credentialTableSection("bot", data.BotEntries, false)
+				<div class="px-4 py-3 is-flex is-align-items-center is-justify-content-space-between" style="border-top: 1px solid var(--bulma-border)">
+					<div>
+						<p class="has-text-weight-semibold">Calendars</p>
+						<p class="is-size-7 has-text-grey mt-1">Calendars are shown in the App Home as upcoming events. Add and manage them on the Calendars page.</p>
+					</div>
+					<div>
+						<a href="/admin/calendars" class="is-size-7 has-text-weight-semibold has-text-link">Manage Calendars →</a>
+					</div>
+				</div>
+			}
+		</div>
+		<div
+			class="mb-5"
+			x-data="{
+				addOpen: false, label: '', url: '', position: 0, active: true, saving: false, err: '',
+				async submit() {
+					if (!this.label.trim() || !this.url.trim()) { this.err = 'Label and URL are required'; return; }
+					this.saving = true; this.err = '';
+					try {
+						const r = await fetch('/api/quick-links', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({label: this.label.trim(), url: this.url.trim(), position: this.position, active: this.active}) });
+						if (!r.ok) { const d = await r.json().catch(() => ({})); this.err = d.error || 'Failed to add'; return; }
+						this.addOpen = false; this.label = ''; this.url = ''; this.position = 0; this.active = true;
+						htmx.ajax('GET', '/admin/fragments/app-home/links-list', { target: '#quick-links-list', swap: 'outerHTML' });
+					} catch { this.err = 'Network error'; } finally { this.saving = false; }
+				}
+			}"
+		>
+			@SectionedCard("Quick Links", quickLinksAddBtn()) {
+				<div x-show="addOpen" style="display:none; border-bottom: 1px solid var(--bulma-border)" class="px-4 py-3">
+					<form x-on:submit.prevent="submit()">
+						<div class="columns mb-2">
+							<div class="column">
+								<div class="field">
+									<label for="ql-label" class="label is-small">Label <span class="has-text-danger" aria-hidden="true">*</span></label>
+									<div class="control">
+										<input id="ql-label" type="text" x-model="label" placeholder="e.g. Meeting Notes" class="input is-small"/>
+									</div>
+								</div>
+							</div>
+							<div class="column">
+								<div class="field">
+									<label for="ql-url" class="label is-small">URL <span class="has-text-danger" aria-hidden="true">*</span></label>
+									<div class="control">
+										<input id="ql-url" type="url" x-model="url" placeholder="https://…" class="input is-small"/>
+									</div>
+								</div>
+							</div>
+							<div class="column is-narrow">
+								<div class="field">
+									<label for="ql-pos" class="label is-small">Position</label>
+									<div class="control">
+										<input id="ql-pos" type="number" x-model.number="position" class="input is-small" style="max-width: 5rem"/>
+									</div>
+								</div>
+							</div>
+						</div>
+						<div class="is-flex is-flex-wrap-wrap is-align-items-center is-justify-content-space-between" style="gap: 0.5rem">
+							<label class="is-flex is-align-items-center is-size-6" style="gap: 0.5rem; cursor: pointer">
+								<input type="checkbox" x-model="active"/>
+								Active
+							</label>
+							<div class="is-flex is-align-items-center" style="gap: 0.5rem">
+								<span x-show="err" x-text="err" role="alert" class="is-size-7 has-text-danger"></span>
+								<button type="submit" :disabled="saving" class="button is-primary is-small">Save</button>
+								<button type="button" x-on:click="addOpen = false; err = ''" class="button is-small">Cancel</button>
+							</div>
+						</div>
+					</form>
+				</div>
+				@QuickLinksListFragment(data.Links)
+			}
+		</div>
+		<div
+			x-data="{
+				addOpen: false, userId: '', title: '', position: 0, saving: false, err: '',
+				async submit() {
+					if (!this.userId) { this.err = 'Select a member'; return; }
+					if (!this.title.trim()) { this.err = 'Title is required'; return; }
+					this.saving = true; this.err = '';
+					try {
+						const r = await fetch('/api/contacts', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({userId: this.userId, title: this.title.trim(), position: this.position}) });
+						if (!r.ok) { const d = await r.json().catch(() => ({})); this.err = d.error || 'Failed to add'; return; }
+						this.addOpen = false; this.userId = ''; this.title = ''; this.position = 0;
+						htmx.ajax('GET', '/admin/fragments/app-home/contacts-list', { target: '#contacts-list', swap: 'outerHTML' });
+					} catch { this.err = 'Network error'; } finally { this.saving = false; }
+				}
+			}"
+		>
+			@SectionedCard("Contacts", contactsAddBtn()) {
+				<div x-show="addOpen" style="display:none; border-bottom: 1px solid var(--bulma-border)" class="px-4 py-3">
+					<form x-on:submit.prevent="submit()">
+						<div class="columns mb-2">
+							<div class="column">
+								<div class="field">
+									<label for="ct-user" class="label is-small">Member <span class="has-text-danger" aria-hidden="true">*</span></label>
+									<div class="control">
+										<div class="select is-small is-fullwidth">
+											<select id="ct-user" x-model="userId">
+												<option value="">— select member —</option>
+												for _, u := range data.Users {
+													<option value={ u.ID }>{ u.DisplayName }</option>
+												}
+											</select>
+										</div>
+									</div>
+								</div>
+							</div>
+							<div class="column">
+								<div class="field">
+									<label for="ct-title" class="label is-small">Title <span class="has-text-danger" aria-hidden="true">*</span></label>
+									<div class="control">
+										<input id="ct-title" type="text" x-model="title" placeholder="e.g. Chapter Chair" class="input is-small"/>
+									</div>
+								</div>
+							</div>
+							<div class="column is-narrow">
+								<div class="field">
+									<label for="ct-pos" class="label is-small">Position</label>
+									<div class="control">
+										<input id="ct-pos" type="number" x-model.number="position" class="input is-small" style="max-width: 5rem"/>
+									</div>
+								</div>
+							</div>
+						</div>
+						<div class="is-flex is-flex-wrap-wrap is-align-items-center is-justify-content-flex-end" style="gap: 0.5rem">
+							<span x-show="err" x-text="err" role="alert" class="is-size-7 has-text-danger"></span>
+							<button type="submit" :disabled="saving" class="button is-primary is-small">Save</button>
+							<button type="button" x-on:click="addOpen = false; err = ''" class="button is-small">Cancel</button>
+						</div>
+					</form>
+				</div>
+				@ContactsListFragment(data.Contacts)
+			}
+		</div>
+	}
+}
+
+templ QuickLinksListFragment(links []store.QuickLink) {
+	<div id="quick-links-list">
+		if len(links) == 0 {
+			<div class="px-4 py-6 has-text-centered">
+				@EmptyState("No quick links yet. Add one to show it as a button in the Slack App Home.")
+			</div>
+		} else {
+			for _, l := range links {
+				<div class="px-4 py-3 is-size-6" x-data={ quickLinkRowData(l) } style="border-top: 1px solid var(--bulma-border)">
+					<div :class="{ 'is-flex': !editing, 'is-hidden': editing }" class="is-justify-content-space-between is-align-items-center" style="gap: 0.75rem">
+						<div style="min-width: 0; flex: 1">
+							<p class="has-text-weight-semibold" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{ l.Label }</p>
+							<p class="is-size-7 has-text-grey is-hidden-tablet mt-1" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{ l.URL }</p>
+							<div class="is-flex is-align-items-center is-hidden-tablet mt-1" style="gap: 0.5rem">
+								<span class="is-size-7 has-text-grey">pos { strconv.Itoa(l.Position) }</span>
+								if l.Active {
+									@StatusBadge("active", "green")
+								} else {
+									@StatusBadge("inactive", "gray")
+								}
+							</div>
+						</div>
+						<p class="is-size-7 has-text-grey is-hidden-mobile" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+							<a href={ templ.SafeURL(l.URL) } target="_blank" rel="noopener noreferrer" class="has-text-grey">{ l.URL }</a>
+						</p>
+						<span class="is-size-7 has-text-grey is-hidden-mobile" style="flex-shrink: 0">pos { strconv.Itoa(l.Position) }</span>
+						<span class="is-hidden-mobile" style="flex-shrink: 0">
+							if l.Active {
+								@StatusBadge("yes", "green")
+							} else {
+								@StatusBadge("no", "gray")
+							}
+						</span>
+						<div class="is-flex is-align-items-center" style="gap: 0.5rem; flex-shrink: 0">
+							<button x-on:click="editing = true" class="button is-small is-link is-outlined">Edit</button>
+							@ConfirmDeleteButton("del()")
+						</div>
+					</div>
+					<div x-show="editing" style="display:none">
+						<div class="columns mb-2">
+							<div class="column">
+								<div class="control">
+									<input type="text" x-model="label" placeholder="Label" aria-label="Label" class="input is-small"/>
+								</div>
+							</div>
+							<div class="column">
+								<div class="control">
+									<input type="url" x-model="url" placeholder="https://…" aria-label="URL" class="input is-small"/>
+								</div>
+							</div>
+						</div>
+						<div class="is-flex is-align-items-center mb-2" style="gap: 0.75rem">
+							<input type="number" x-model.number="position" aria-label="Position" class="input is-small" style="max-width: 5rem"/>
+							<label class="is-flex is-align-items-center is-size-6" style="gap: 0.5rem; cursor: pointer">
+								<input type="checkbox" x-model="active"/>
+								Active
+							</label>
+						</div>
+						<span :class="{ 'is-block': errMsg, 'is-hidden': !errMsg }" x-text="errMsg" role="alert" class="is-size-7 has-text-danger mb-2"></span>
+						<div class="is-flex is-justify-content-flex-end is-align-items-center" style="gap: 0.5rem">
+							<button
+								x-on:click="save()"
+								:disabled="saving || (label === origLabel && url === origUrl && position === origPos && active === origActive)"
+								class="button is-primary is-small"
+							>Save</button>
+							<button x-on:click="editing = false; errMsg = ''" class="button is-small">Cancel</button>
+						</div>
+					</div>
+				</div>
+			}
+		}
+	</div>
+}
+
+templ ContactsListFragment(contacts []store.Contact) {
+	<div id="contacts-list">
+		if len(contacts) == 0 {
+			<div class="px-4 py-6 has-text-centered">
+				@EmptyState("No contacts yet. Add a member to surface them in the Slack App Home.")
+			</div>
+		} else {
+			for _, c := range contacts {
+				<div class="px-4 py-3 is-size-6" x-data={ contactRowData(c) } style="border-top: 1px solid var(--bulma-border)">
+					<div :class="{ 'is-flex': !editing, 'is-hidden': editing }" class="is-justify-content-space-between is-align-items-center" style="gap: 0.75rem">
+						<div style="min-width: 0; flex: 1">
+							<p class="has-text-weight-semibold">{ c.Username }</p>
+							<p class="is-size-7 has-text-grey mt-1">{ c.Title } · pos { strconv.Itoa(c.Position) }</p>
+						</div>
+						<div class="is-flex is-align-items-center" style="gap: 0.5rem; flex-shrink: 0">
+							<button x-on:click="editing = true" class="button is-small is-link is-outlined">Edit</button>
+							@ConfirmDeleteButton("del()")
+						</div>
+					</div>
+					<div x-show="editing" style="display:none">
+						<div class="is-flex is-align-items-center mb-2" style="gap: 0.5rem">
+							<input type="text" x-model="title" placeholder="Title" aria-label="Title" class="input is-small" style="flex: 1"/>
+							<input type="number" x-model.number="position" aria-label="Position" class="input is-small" style="max-width: 5rem"/>
+						</div>
+						<span :class="{ 'is-block': errMsg, 'is-hidden': !errMsg }" x-text="errMsg" role="alert" class="is-size-7 has-text-danger mb-2"></span>
+						<div class="is-flex is-justify-content-flex-end is-align-items-center" style="gap: 0.5rem">
+							<button
+								x-on:click="save()"
+								:disabled="saving || (title === origTitle && position === origPos)"
+								class="button is-primary is-small"
+							>Save</button>
+							<button x-on:click="editing = false; errMsg = ''" class="button is-small">Cancel</button>
+						</div>
+					</div>
+				</div>
+			}
+		}
+	</div>
+}

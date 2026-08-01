@@ -1,0 +1,86 @@
+package admintempl
+
+import (
+	"commons/store"
+	"fmt"
+	"time"
+)
+
+templ NotificationsPanel(notifications []store.Notification, hasMore bool) {
+	<div class="p-4">
+		<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+			<h3 class="has-text-weight-semibold is-size-6">Notifications</h3>
+			if len(notifications) > 0 {
+				<button
+					hx-post="/api/notifications/read-all"
+					hx-swap="none"
+					hx-on::after-request="htmx.trigger(document.body, 'notifications-changed')"
+					class="button is-ghost is-small has-text-primary is-size-7 px-0"
+				>Mark all read</button>
+			}
+		</div>
+		if len(notifications) == 0 {
+			<p class="is-size-7 has-text-grey has-text-centered py-4">No notifications</p>
+		}
+		for _, n := range notifications {
+			<div
+				class="px-3 py-2 mb-2"
+				style={ notifStyle(n.Read) }
+			>
+				<div class="is-flex is-justify-content-space-between is-align-items-flex-start" style="gap: 0.5rem">
+					<div style="min-width: 0; flex: 1">
+						<p class="has-text-weight-semibold is-size-6">{ n.Title }</p>
+						if n.Body != nil {
+							<p class="is-size-7 mt-1">{ *n.Body }</p>
+						}
+						<p class="is-size-7 has-text-grey mt-1">{ formatTimeAgo(n.CreatedAt) }</p>
+					</div>
+					if !n.Read {
+						<button
+							hx-post={ fmt.Sprintf("/api/notifications/read?id=%s", n.ID) }
+							hx-swap="none"
+							hx-on::after-request="htmx.trigger(document.body, 'notifications-changed')"
+							class="delete is-small"
+							title="Mark read"
+						></button>
+					}
+				</div>
+				if n.ActionURL != nil {
+					<a
+						href={ templ.SafeURL(*n.ActionURL) }
+						class="is-size-7 has-text-link mt-1 is-block"
+					>View →</a>
+				}
+			</div>
+		}
+		if hasMore {
+			<button
+				hx-get="/fragments/notifications?offset=20"
+				hx-target="closest div"
+				hx-swap="beforeend"
+				class="button is-ghost is-small is-fullwidth has-text-primary is-size-7"
+			>Load more</button>
+		}
+	</div>
+}
+
+func notifStyle(read bool) string {
+	if !read {
+		return "background: var(--bulma-primary-10, rgba(var(--bulma-primary-rgb), 0.08)); border-radius: 0.375rem"
+	}
+	return "border-radius: 0.375rem"
+}
+
+func formatTimeAgo(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}

@@ -1,0 +1,114 @@
+package admintempl
+
+import (
+	"encoding/json"
+	"strconv"
+	"time"
+
+	"commons/store"
+)
+
+func formatAuditTime(t time.Time) string {
+	return t.Format("Jan 2, 2006 3:04 PM")
+}
+
+func prettyJSON(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return string(raw)
+	}
+	b, _ := json.MarshalIndent(v, "", "  ")
+	return string(b)
+}
+
+func auditPluralize(n int) string {
+	if n == 1 {
+		return "entry"
+	}
+	return "entries"
+}
+
+templ AuditPage(entries []store.AuditEntry, total, page, totalPages int) {
+	@Layout("Audit Log", "/admin/audit") {
+		<div>
+			<h1 class="title is-4 mb-3">Audit Log</h1>
+			@PageHelp() {
+				An append-only record of every admin action. Click a row to see the full detail, including what changed.
+			}
+			@AuditRows(entries, total, page, totalPages)
+		</div>
+	}
+}
+
+templ AuditRows(entries []store.AuditEntry, total, page, totalPages int) {
+	<div id="audit-rows">
+		if len(entries) == 0 {
+			@EmptyState("No audit entries found.")
+		} else {
+			<div class="card">
+				<div class="table-container">
+					<table class="table is-fullwidth is-hoverable is-narrow mb-0">
+						<thead>
+							<tr>
+								<th class="is-hidden-mobile">Time</th>
+								<th>Action</th>
+								<th class="is-hidden-mobile">Target</th>
+								<th>Detail</th>
+							</tr>
+						</thead>
+						for _, entry := range entries {
+							<tbody x-data="{ expanded: false }">
+								<tr
+									x-on:click="expanded = !expanded"
+									style="cursor: pointer"
+								>
+									<td class="is-hidden-mobile is-size-7 has-text-grey" style="white-space: nowrap">{ formatAuditTime(entry.CreatedAt) }</td>
+									<td>
+										<div class="is-family-monospace is-size-7">{ entry.Action }</div>
+										<div class="is-hidden-tablet is-size-7 has-text-grey mt-1">{ formatAuditTime(entry.CreatedAt) }</div>
+										if entry.Target != nil {
+											<div class="is-hidden-tablet is-size-7 has-text-grey">{ *entry.Target }</div>
+										}
+									</td>
+									<td class="is-hidden-mobile is-size-7 has-text-grey">
+										if entry.Target != nil {
+											{ *entry.Target }
+										} else {
+											—
+										}
+									</td>
+									<td class="is-size-7">
+										if len(entry.Detail) > 0 && string(entry.Detail) != "null" {
+											<button
+												x-on:click.stop="expanded = !expanded"
+												:aria-expanded="expanded"
+												:aria-label="expanded ? 'Hide details' : 'Show details'"
+												class="button is-ghost is-small px-1"
+												x-text="expanded ? 'Hide ▲' : 'Show ▼'"
+											></button>
+										} else {
+											<span class="has-text-grey">—</span>
+										}
+									</td>
+								</tr>
+								if len(entry.Detail) > 0 && string(entry.Detail) != "null" {
+									<tr x-show="expanded" style="display: none" class="panel-surface">
+										<td colspan="4" class="px-4 py-3">
+											<pre class="is-size-7 is-family-monospace" style="overflow: auto; max-height: 10rem; white-space: pre-wrap; word-break: break-all">{ prettyJSON(entry.Detail) }</pre>
+										</td>
+									</tr>
+								}
+							</tbody>
+						}
+					</table>
+				</div>
+				@PaginationNav(page, totalPages, "/admin/fragments/audit-rows?page="+strconv.Itoa(page-1), "/admin/fragments/audit-rows?page="+strconv.Itoa(page+1), "audit-rows") {
+					<p class="is-size-7 has-text-grey">{ strconv.Itoa(total) } { auditPluralize(total) }</p>
+				}
+			</div>
+		}
+	</div>
+}

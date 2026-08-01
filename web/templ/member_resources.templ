@@ -1,0 +1,74 @@
+package admintempl
+
+import "commons/store"
+
+type MemberResourcesPageData struct {
+	Categories  []store.ResourceCategory
+	Resources   []store.Resource
+	Filter      string
+	Permissions []string
+	DisplayName string
+	UnreadCount int
+}
+
+templ MemberResourcesPage(data MemberResourcesPageData) {
+	@PortalLayout("/resources", "/resources", data.DisplayName, FilteredPortalNavItems(data.Permissions), data.UnreadCount) {
+		<div class="container" style="max-width: 48rem; padding: 0.5rem 1rem">
+			<div class="is-flex is-justify-content-space-between is-align-items-center mb-4">
+				<h1 class="title is-4 mb-0">Resources</h1>
+				if len(data.Categories) > 1 {
+					<div class="select is-small">
+						<select
+							hx-get="/resources"
+							hx-target="body"
+							hx-push-url="true"
+							name="category"
+						>
+							<option value="">All Categories</option>
+							for _, cat := range data.Categories {
+								<option value={ cat.Name } selected?={ cat.Name == data.Filter }>{ cat.Name }</option>
+							}
+						</select>
+					</div>
+				}
+			</div>
+			if len(data.Resources) == 0 {
+				<p class="has-text-grey has-text-centered py-6 is-italic">No resources available.</p>
+			}
+			for _, cat := range data.Categories {
+				if memberHasCategoryResources(data.Resources, cat.Name) && (data.Filter == "" || data.Filter == cat.Name) {
+					<section class="mb-5">
+						<p class="is-size-7 has-text-weight-semibold has-text-grey mb-3" style="text-transform: uppercase; letter-spacing: 0.05em">{ cat.Name }</p>
+						<div class="box p-0">
+							for _, res := range data.Resources {
+								if res.Category == cat.Name {
+									<a
+										href={ templ.SafeURL(res.URL) }
+										target="_blank"
+										rel="noopener noreferrer"
+										class="is-flex is-flex-direction-column px-4 py-3"
+										style="border-bottom: 1px solid var(--bulma-border); text-decoration: none; color: inherit"
+									>
+										<span class="has-text-weight-semibold">{ res.Title }</span>
+										if res.Description != nil && *res.Description != "" {
+											<span class="is-size-7 has-text-grey mt-1">{ *res.Description }</span>
+										}
+									</a>
+								}
+							}
+						</div>
+					</section>
+				}
+			}
+		</div>
+	}
+}
+
+func memberHasCategoryResources(resources []store.Resource, category string) bool {
+	for _, r := range resources {
+		if r.Category == category {
+			return true
+		}
+	}
+	return false
+}

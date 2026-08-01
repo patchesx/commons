@@ -1,0 +1,78 @@
+package admintempl
+
+templ LoginPage(showError bool) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>Log in — Portal</title>
+			<link rel="stylesheet" href={ templ.URL(AssetURL("bulma.min.css")) }/>
+			<link rel="stylesheet" href={ templ.URL(AssetURL("app.css")) }/>
+			<link rel="stylesheet" href={ templ.URL(AssetURL("phosphor-icons.css")) }/>
+			<link rel="stylesheet" href={ templ.URL(AssetURL("phosphor-duotone-icons.css")) }/>
+			<script>
+				(function(){
+					var mq = window.matchMedia('(prefers-color-scheme: dark)');
+					function apply(dark) {
+						document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+					}
+					apply(mq.matches);
+					mq.addEventListener('change', function(e){ apply(e.matches); });
+				})();
+			</script>
+		</head>
+		<body>
+			<section class="section" style="min-height: 100vh; display: flex; align-items: center; justify-content: center">
+				<div style="width: 100%; max-width: 22rem">
+					<p class="title is-4 has-text-centered mb-5">Portal</p>
+					<div class="box">
+						<p class="subtitle is-6 mb-4">Log in to your account</p>
+						if showError {
+							<div class="notification is-danger mb-4" role="alert">
+								Incorrect username or password.
+							</div>
+						}
+						<form method="POST" action="/login">
+							<div class="field">
+								<label for="username" class="label is-small">Username</label>
+								<div class="control">
+									<input
+										id="username"
+										type="text"
+										name="username"
+										required
+										autofocus
+										autocomplete="username"
+										class="input"
+									/>
+								</div>
+							</div>
+							<div class="field">
+								<label for="password" class="label is-small">Password</label>
+								<div class="control">
+									<input
+										id="password"
+										type="password"
+										name="password"
+										required
+										autocomplete="current-password"
+										class="input"
+									/>
+								</div>
+							</div>
+							<div class="field mt-5">
+								<div class="control">
+									<button type="submit" class="button is-primary is-fullwidth">Log in</button>
+								</div>
+							</div>
+						</form>
+						<p class="is-size-7 has-text-grey has-text-centered mt-4">
+							First time? Ask your admin for your activation link.
+						</p>
+					</div>
+				</div>
+			</section>
+		</body>
+	</html>
+}

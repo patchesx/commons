@@ -1,0 +1,318 @@
+package admintempl
+
+// GroupRef is a name+ID pair for a role group, used in user group cells.
+type GroupRef struct {
+	ID          string
+	Name        string
+	DisplayName string
+}
+
+// groupLabel returns the human-readable label for a role group, falling back to
+// the machine name when no display name is set.
+func groupLabel(name, displayName string) string {
+	if displayName != "" {
+		return displayName
+	}
+	return name
+}
+
+// ChannelRef is a slim channel record used in the channel-approvers modal.
+type ChannelRef struct {
+	SlackChannelID string
+	Name           string
+}
+
+// UserViewRow holds the data needed to render a single row in the Users table.
+type UserViewRow struct {
+	ID             string
+	DisplayName    string
+	Email          string
+	PlatformStatus string
+	IsWebAdmin     bool
+	HasWebIdentity bool
+	Group          *GroupRef
+	AllGroups      []GroupRef
+}
+
+func userStatusColor(status string) string {
+	switch status {
+	case "active":
+		return "green"
+	case "invited":
+		return "yellow"
+	case "deactivated":
+		return "gray"
+	default:
+		return "gray"
+	}
+}
+
+func userStatusLabel(status string) string {
+	switch status {
+	case "invited":
+		return "pending"
+	case "active":
+		return "active"
+	case "deactivated":
+		return "deactivated"
+	default:
+		return status
+	}
+}
+
+templ UsersPage(users []UserViewRow, statusFilter string) {
+	@Layout("Users", "/admin/users") {
+		<div>
+			<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+				<h1 class="title is-4 mb-0">Users</h1>
+				<div class="control">
+					<label for="user-status-filter" class="is-sr-only">Filter by status</label>
+					<div class="select is-small">
+						<select
+							id="user-status-filter"
+							name="status"
+							hx-get="/admin/fragments/users-table"
+							hx-trigger="change"
+							hx-target="#users-table"
+							hx-swap="outerHTML"
+						>
+							<option value="" selected?={ statusFilter == "" }>All statuses</option>
+							<option value="active" selected?={ statusFilter == "active" }>Active</option>
+							<option value="invited" selected?={ statusFilter == "invited" }>Invited</option>
+							<option value="deactivated" selected?={ statusFilter == "deactivated" }>Deactivated</option>
+						</select>
+					</div>
+				</div>
+			</div>
+			<div id="import-result" class="mb-3"></div>
+			<details class="box mb-4" style="padding: 0">
+				<summary class="px-4 py-3 is-clickable has-text-weight-semibold is-size-6" style="list-style: none; cursor: pointer">
+					Add Members
+				</summary>
+				<div class="px-4 pb-4 pt-3">
+					<!-- Single member creation -->
+					<div class="mb-5">
+						<h3 class="is-size-6 has-text-weight-semibold mb-3">Add single member</h3>
+						<form
+							hx-post="/admin/members/create"
+							hx-target="#import-result"
+							hx-swap="innerHTML"
+							hx-on:htmx:after-request="if(event.detail.successful) { this.reset(); htmx.ajax('GET', '/admin/fragments/users-table', {target: '#users-table', swap: 'outerHTML'}); }"
+						>
+							<div class="field is-grouped is-flex-wrap-wrap">
+								<div class="control">
+									<label class="label is-small">Name</label>
+									<input type="text" name="display_name" required placeholder="Full name" class="input is-small"/>
+								</div>
+								<div class="control">
+									<label class="label is-small">Email</label>
+									<input type="email" name="email" required placeholder="email@example.com" class="input is-small"/>
+								</div>
+								<div class="control" style="align-self: flex-end">
+									<button type="submit" class="button is-primary is-small">Add Member</button>
+								</div>
+							</div>
+						</form>
+					</div>
+					<!-- CSV import -->
+					<div>
+						<h3 class="is-size-6 has-text-weight-semibold mb-2">Bulk import from CSV</h3>
+						<p class="is-size-7 has-text-grey mb-3">
+							CSV format: <code>name,email</code> — one member per line, no header required.
+						</p>
+						<form
+							hx-post="/admin/members/import"
+							hx-target="#import-result"
+							hx-swap="innerHTML"
+							hx-encoding="multipart/form-data"
+							hx-on:htmx:after-request="if(event.detail.successful) htmx.ajax('GET', '/admin/fragments/users-table', {target: '#users-table', swap: 'outerHTML'})"
+						>
+							<div class="field is-grouped">
+								<div class="control">
+									<input type="file" name="csv" accept=".csv" required class="is-size-7"/>
+								</div>
+								<div class="control">
+									<button type="submit" class="button is-primary is-small">Import</button>
+								</div>
+							</div>
+						</form>
+					</div>
+				</div>
+			</details>
+			@PageHelp() {
+				All members who have opened the App Home at least once. Assign roles and manage access here. Accounts are created automatically on first visit.
+			}
+			@UsersTable(users)
+		</div>
+		<!-- Dialog for promote-to-admin modal -->
+		<dialog id="users-modal" aria-labelledby="promote-dialog-title"></dialog>
+	}
+}
+
+templ UsersTable(users []UserViewRow) {
+	<div id="users-table">
+		<div class="card">
+			<div class="table-container">
+				<table class="table is-fullwidth is-hoverable is-narrow mb-0">
+					<thead>
+						<tr>
+							<th>Name</th>
+							<th class="is-hidden-mobile">Status</th>
+							<th class="is-hidden-mobile">Role Group</th>
+							<th>Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, user := range users {
+							<tr>
+								<td>
+									<div class="has-text-weight-semibold">{ user.DisplayName }</div>
+									if user.Email != "" {
+										<div class="is-size-7 has-text-grey">{ user.Email }</div>
+									}
+									<div class="is-hidden-tablet mt-1">
+										@StatusBadge(userStatusLabel(user.PlatformStatus), userStatusColor(user.PlatformStatus))
+									</div>
+									<div class="is-hidden-tablet mt-2">
+										@userGroupCell(user.ID, user.Group, user.AllGroups)
+									</div>
+								</td>
+								<td class="is-hidden-mobile">
+									@StatusBadge(userStatusLabel(user.PlatformStatus), userStatusColor(user.PlatformStatus))
+								</td>
+								<td class="is-hidden-mobile">
+									@userGroupCell(user.ID, user.Group, user.AllGroups)
+								</td>
+								<td>
+									@userActionCell(user.ID, user.DisplayName, user.Email, user.IsWebAdmin, user.HasWebIdentity)
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+}
+
+templ userGroupCell(userID string, group *GroupRef, allGroups []GroupRef) {
+	<div class="select is-small">
+		<select
+			aria-label="Role group"
+			x-on:change={ `if ($event.target.value) { htmx.ajax('POST', '/admin/fragments/users/` + userID + `/group', { values: { groupId: $event.target.value }, swap: 'none' }).then(() => htmx.ajax('GET', '/admin/fragments/users-table', {target: '#users-table', swap: 'outerHTML'})) } else { htmx.ajax('DELETE', '/admin/fragments/users/` + userID + `/group', { swap: 'none' }).then(() => htmx.ajax('GET', '/admin/fragments/users-table', {target: '#users-table', swap: 'outerHTML'})) }` }
+		>
+			<option value="">— None —</option>
+			for _, g := range allGroups {
+				<option value={ g.ID } selected?={ group != nil && g.ID == group.ID }>{ groupLabel(g.Name, g.DisplayName) }</option>
+			}
+		</select>
+	</div>
+}
+
+templ userActionCell(userID, displayName, email string, isWebAdmin, hasWebIdentity bool) {
+	<div class="buttons are-small mb-0">
+		if !isWebAdmin {
+			<button
+				hx-get={ "/admin/fragments/users/" + userID + "/promote-modal" }
+				hx-target="#users-modal"
+				hx-swap="innerHTML"
+				hx-on:htmx:after-request="document.getElementById('users-modal').showModal()"
+				class="button is-primary is-outlined is-small"
+			>Make Admin</button>
+		}
+		if hasWebIdentity {
+			<button
+				hx-post={ "/admin/fragments/users/" + userID + "/reset-link" }
+				hx-target="#import-result"
+				hx-swap="innerHTML"
+				class="button is-info is-outlined is-small"
+			>Reset Link</button>
+		}
+		<button
+			hx-get={ "/admin/fragments/users/" + userID + "/channel-approvers-modal" }
+			hx-target="#users-modal"
+			hx-swap="innerHTML"
+			hx-on:htmx:after-request="document.getElementById('users-modal').showModal()"
+			class="button is-small"
+		>Channels</button>
+	</div>
+}
+
+templ ChannelApproversModal(userID, userName string, channels []ChannelRef, assignedIDs map[string]bool) {
+	<div class="box">
+		<h2 class="title is-5">Channel Approver Assignment</h2>
+		<p class="subtitle is-6 mb-4">
+			{ userName } will receive access request notifications for the selected channels.
+		</p>
+		<form
+			hx-post={ "/admin/fragments/users/" + userID + "/channel-approvers" }
+			hx-target="#users-modal"
+			hx-swap="innerHTML"
+		>
+			if len(channels) == 0 {
+				<p class="is-size-7 has-text-grey mb-4">No private channels have been synced yet. Run a Slack sync to populate channels.</p>
+			} else {
+				<div class="mb-4" style="max-height: 18rem; overflow-y: auto">
+					for _, ch := range channels {
+						<label class="is-flex is-align-items-center is-size-6 mb-2" style="gap: 0.5rem; cursor: pointer">
+							<input
+								type="checkbox"
+								name="channel_ids"
+								value={ ch.SlackChannelID }
+								checked?={ assignedIDs[ch.SlackChannelID] }
+							/>
+							<span>{ ch.Name }</span>
+						</label>
+					}
+				</div>
+			}
+			<div class="field is-grouped is-grouped-right">
+				<div class="control">
+					<button type="button" onclick="document.getElementById('users-modal').close()" class="button">Cancel</button>
+				</div>
+				<div class="control">
+					<button type="submit" class="button is-primary">Save</button>
+				</div>
+			</div>
+		</form>
+	</div>
+}
+
+templ PromoteModal(userID, userName, email, errMsg string) {
+	<div class="box">
+		<h2 id="promote-dialog-title" class="title is-5">Grant Admin Access</h2>
+		<p class="subtitle is-6 mb-4">
+			{ userName } will receive a Slack DM with a login link and must reset their password on first sign-in.
+		</p>
+		<form
+			hx-post={ "/admin/fragments/users/" + userID + "/promote" }
+			hx-target="#users-modal"
+			hx-swap="innerHTML"
+		>
+			<div class="field">
+				<label for="promote-email" class="label is-small">Login email</label>
+				<div class="control">
+					<input
+						autofocus
+						id="promote-email"
+						name="email"
+						type="email"
+						value={ email }
+						required
+						placeholder="Email address"
+						class="input"
+					/>
+				</div>
+			</div>
+			@AlertBox(errMsg, "error")
+			<div class="field is-grouped is-grouped-right mt-4">
+				<div class="control">
+					<button type="button" onclick="document.getElementById('users-modal').close()" class="button">Cancel</button>
+				</div>
+				<div class="control">
+					<button type="submit" class="button is-primary">Confirm</button>
+				</div>
+			</div>
+		</form>
+	</div>
+}

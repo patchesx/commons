@@ -1,0 +1,239 @@
+package admintempl
+
+import (
+	"fmt"
+
+	"commons/plugin"
+	"commons/store"
+)
+
+func whActionInitialType(action *store.WebhookAction, types []plugin.ActionTypeInfo) string {
+	if action != nil && action.Type != "" {
+		return action.Type
+	}
+	if len(types) > 0 {
+		return types[0].ID
+	}
+	return ""
+}
+
+func whActionCurrentParams(action *store.WebhookAction) map[string]any {
+	if action == nil {
+		return nil
+	}
+	return action.Params
+}
+
+templ actionParamFields(at *plugin.ActionTypeInfo, current map[string]any, channels []WHChannel, users []WHUser, locs []store.StorageLocation, availVars []plugin.DataFieldDef, categories []string, pipelineID string) {
+	if len(at.ParamSchema) == 0 {
+		<p class="is-size-7 has-text-grey is-italic">No configuration required for this action type.</p>
+	} else {
+		for _, def := range at.ParamSchema {
+			@actionParamField(def, current, channels, users, locs, availVars, categories, pipelineID)
+		}
+	}
+}
+
+templ MessageVariantSlot(i int, fieldKey string, initVal string, channels []WHChannel, availVars []plugin.DataFieldDef) {
+	<div x-data="{ active: true }">
+		<fieldset :disabled="!active" x-show="active" style="border: none; padding: 0; margin: 0">
+			<div class="mb-3">
+				<div class="is-flex is-align-items-center is-justify-content-space-between mb-1">
+					<label class="label is-small mb-0">{ fmt.Sprintf("Variant %d", i+1) }</label>
+					if i > 0 {
+						<button
+							type="button"
+							x-on:click.prevent="active = false"
+							class="button is-ghost is-small has-text-danger"
+							style="height: auto; border: none"
+						>Remove</button>
+					}
+				</div>
+				@SlackMessageComposer(SlackComposerOpts{
+					FieldName:     fmt.Sprintf("param_%s_%d", fieldKey, i),
+					InitValue:     initVal,
+					Channels:      channels,
+					PipelineVars:  availVars,
+					ShowInitiator: hasVar(availVars, "user_id"),
+					Standalone:    true,
+				})
+			</div>
+		</fieldset>
+	</div>
+}
+
+templ actionParamField(def plugin.ParamDef, current map[string]any, channels []WHChannel, users []WHUser, locs []store.StorageLocation, availVars []plugin.DataFieldDef, categories []string, pipelineID string) {
+	if def.Type == "message_variants" {
+		{{ variants := whParamVariants(current) }}
+		if len(variants) == 0 {
+			{{ variants = []string{""} }}
+		}
+		<div class="field mb-3">
+			<div id={ "variant-slots-" + def.Key }>
+				for i, v := range variants {
+					@MessageVariantSlot(i, def.Key, v, channels, availVars)
+				}
+			</div>
+			<div class="mt-2">
+				<button
+					type="button"
+					hx-get={ "/admin/fragments/message-variant?pipeline_id=" + pipelineID + "&key=" + def.Key }
+					hx-target={ "#variant-slots-" + def.Key }
+					hx-swap="beforeend"
+					hx-include="[name='position']"
+					hx-vals={ `js:{variant_next_` + def.Key + `: document.querySelectorAll('#variant-slots-` + def.Key + ` > div').length}` }
+					class="button is-small is-light"
+				>
+					<span class="icon"><i class="ph ph-plus"></i></span>
+					<span>Add variant</span>
+				</button>
+			</div>
+			if def.Description != "" {
+				<p class="help has-text-grey mt-2">{ def.Description }</p>
+			}
+		</div>
+	} else if def.Key == "message_template" {
+		<div class="mb-3">
+			@SlackMessageComposer(SlackComposerOpts{
+				FieldName:    "param_" + def.Key,
+				InitValue:    whParamValue(current, def.Key),
+				Channels:     channels,
+				PipelineVars: availVars,
+				Standalone:   true,
+				Placeholder:  "Use {{key}} to insert values from the pipeline data.",
+			})
+			if def.Description != "" {
+				<p class="help has-text-grey">{ def.Description }</p>
+			}
+		</div>
+	} else {
+		<div class="field mb-3">
+			<label for={ "param-" + def.Key } class="label is-small">
+				{ def.Label }
+				if def.Required {
+					<span class="has-text-danger" aria-hidden="true">*</span>
+				}
+			</label>
+			<div class="control">
+				switch def.Type {
+					case "storage_location_select":
+						<div class="select is-small is-fullwidth">
+							<select id={ "param-" + def.Key } name={ "param_" + def.Key }>
+								<option value="">— Select a storage location —</option>
+								for _, loc := range locs {
+									<option value={ loc.Path } selected?={ whParamValue(current, def.Key) == loc.Path }>
+										{ loc.IntegrationName } / { loc.Name } ({ loc.Path })
+									</option>
+								}
+							</select>
+						</div>
+					case "resource_category_select":
+						<div class="select is-small is-fullwidth">
+							<select id={ "param-" + def.Key } name={ "param_" + def.Key }>
+								<option value="">— Select a category —</option>
+								for _, cat := range categories {
+									<option value={ cat } selected?={ whParamValue(current, def.Key) == cat }>{ cat }</option>
+								}
+							</select>
+						</div>
+					case "channel_select":
+						<div class="select is-small is-fullwidth">
+							<select id={ "param-" + def.Key } name={ "param_" + def.Key }>
+								<option value="">— Select a channel —</option>
+								if len(availVars) > 0 {
+									<optgroup label="From pipeline data">
+										for _, v := range availVars {
+											<option value={ "{{" + v.Key + "}}" } selected?={ whParamValue(current, def.Key) == "{{"+v.Key+"}}" }>{ v.Label }</option>
+										}
+									</optgroup>
+									<optgroup label="Channels">
+										for _, ch := range channels {
+											<option value={ ch.ID } selected?={ whParamValue(current, def.Key) == ch.ID }>#{ ch.Name }</option>
+										}
+									</optgroup>
+								} else {
+									for _, ch := range channels {
+										<option value={ ch.ID } selected?={ whParamValue(current, def.Key) == ch.ID }>#{ ch.Name }</option>
+									}
+								}
+							</select>
+						</div>
+					case "user_select":
+						<div class="select is-small is-fullwidth">
+							<select id={ "param-" + def.Key } name={ "param_" + def.Key }>
+								<option value="">— Select a user —</option>
+								if len(availVars) > 0 {
+									<optgroup label="From pipeline data">
+										for _, v := range availVars {
+											<option value={ "{{" + v.Key + "}}" } selected?={ whParamValue(current, def.Key) == "{{"+v.Key+"}}" }>{ v.Label }</option>
+										}
+									</optgroup>
+									<optgroup label="Users">
+										for _, u := range users {
+											if u.SlackID != "" {
+												<option value={ u.SlackID } selected?={ whParamValue(current, def.Key) == u.SlackID }>{ u.DisplayName }</option>
+											}
+										}
+									</optgroup>
+								} else {
+									for _, u := range users {
+										if u.SlackID != "" {
+											<option value={ u.SlackID } selected?={ whParamValue(current, def.Key) == u.SlackID }>{ u.DisplayName }</option>
+										}
+									}
+								}
+							</select>
+						</div>
+					case "select":
+						<div class="select is-small is-fullwidth">
+							<select id={ "param-" + def.Key } name={ "param_" + def.Key }>
+								<option value="">— Select —</option>
+								for _, opt := range def.Options {
+									<option value={ opt.Value } selected?={ whParamValue(current, def.Key) == opt.Value }>{ opt.Label }</option>
+								}
+							</select>
+						</div>
+					case "boolean":
+						<label class="is-flex is-align-items-center is-size-6" style="gap: 0.5rem; cursor: pointer">
+							<input
+								id={ "param-" + def.Key }
+								type="checkbox"
+								name={ "param_" + def.Key }
+								value="true"
+								checked?={ whParamValue(current, def.Key) == "true" }
+							/>
+							Enabled
+						</label>
+					default:
+						<input
+							id={ "param-" + def.Key }
+							type="text"
+							name={ "param_" + def.Key }
+							value={ whParamValue(current, def.Key) }
+							class="input is-small"
+						/>
+				}
+			</div>
+			if def.Description != "" {
+				<p class="help has-text-grey">{ def.Description }</p>
+			}
+			if def.Dynamic && len(availVars) > 0 {
+				<div class="mt-2">
+					<p class="is-size-7 has-text-grey mb-1">Available variables — click to insert:</p>
+					<div class="is-flex is-flex-wrap-wrap" style="gap: 0.25rem">
+						for _, v := range availVars {
+							<button
+								type="button"
+								class="button is-small is-family-monospace"
+								onclick={ insertPipelineVar("param-"+def.Key, v.Key) }
+								title={ v.Label + ": " + v.Description }
+							>{ "{{" + v.Key + "}}" }</button>
+						}
+					</div>
+				</div>
+			} else if def.Dynamic {
+				<p class="help has-text-grey">Use <code class="is-family-monospace">{ "{{key}}" }</code> to reference values from earlier pipeline steps.</p>
+			}
+		</div>
+	}
+}

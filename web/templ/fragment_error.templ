@@ -1,0 +1,9 @@
+package admintempl
+
+// FragmentError is the standard error fragment for HTMX endpoints under
+// /admin/fragments and /fragments. It is returned with HTTP 200 so HTMX
+// swaps it into the target — a non-2xx response is dropped by HTMX and the
+// user sees nothing happen.
+templ FragmentError(msg string) {
+	<div class="notification is-danger is-light" role="alert">{ msg }</div>
+}
