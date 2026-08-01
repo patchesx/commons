@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS integrations (
 );
 
 -- 5. Seed default integration instances for core types.
---    Legistar is seeded per distinct client subdomain configured in legislative_bodies.
+--    Legistar is seeded in 114 (after legislative_bodies is created).
 --    No unique constraint on type, so guard with NOT EXISTS.
 INSERT INTO integrations (type, name)
 SELECT v.type, v.name
@@ -63,12 +63,6 @@ FROM (VALUES
     ('openstates', 'OpenStates')
 ) AS v(type, name)
 WHERE NOT EXISTS (SELECT 1 FROM integrations i WHERE i.type = v.type);
-
-INSERT INTO integrations (type, name)
-SELECT DISTINCT 'legistar', 'Legistar (' || legistar_client || ')'
-FROM legislative_bodies
-WHERE data_source = 'legistar' AND legistar_client IS NOT NULL
-  AND NOT EXISTS (SELECT 1 FROM integrations i WHERE i.type = 'legistar');
 
 -- 6. Per-instance credentials and settings.
 --    Sensitive values stored with enc:v1: prefix (same as config_store).
@@ -93,22 +87,3 @@ CREATE TABLE IF NOT EXISTS integration_config_schema (
     required         BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (integration_type, key)
 );
-
--- 8. Auth config seeds — self-registration flag (058) and default role (060).
---    Moved from 102_auth.sql: config_schema/config_store are created above,
---    so these INSERTs must run after this migration, not before.
-INSERT INTO config_schema (service, key, label, description, sensitive, required)
-VALUES
-    ('auth', 'allow_registration', 'Allow Self-Registration',
-     'When enabled, anyone can create an account at /register. Disable for admin-provisioned-only orgs.',
-     FALSE, FALSE),
-    ('auth', 'default_role_id', 'Default Member Role',
-     'Role assigned to new self-registered users. Leave empty to assign no role (admin assigns roles later).',
-     FALSE, FALSE)
-ON CONFLICT (service, key) DO NOTHING;
-
-INSERT INTO config_store (service, key, value, sensitive)
-VALUES
-    ('auth', 'allow_registration', 'false', FALSE),
-    ('auth', 'default_role_id', '', FALSE)
-ON CONFLICT (service, key) DO NOTHING;

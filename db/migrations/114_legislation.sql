@@ -125,6 +125,15 @@ SELECT 'Jackson County Legislature', 'county', 'MO', 'legistar', 'jacksonco'
 WHERE NOT EXISTS (SELECT 1 FROM legislative_bodies b WHERE b.name = 'Jackson County Legislature');
 
 -- ---------------------------------------------------------------------------
+-- Seed Legistar integration instance (moved from 104: depends on legislative_bodies)
+-- ---------------------------------------------------------------------------
+INSERT INTO integrations (type, name)
+SELECT DISTINCT 'legistar', 'Legistar (' || legistar_client || ')'
+FROM legislative_bodies
+WHERE data_source = 'legistar' AND legistar_client IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM integrations i WHERE i.type = 'legistar');
+
+-- ---------------------------------------------------------------------------
 -- Permissions
 -- ---------------------------------------------------------------------------
 INSERT INTO permissions (key, description) VALUES
