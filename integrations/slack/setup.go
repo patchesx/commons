@@ -132,7 +132,7 @@ func buildManifestYAML(orgName, baseURL, eventsSlug, interactionsSlug string) st
 features:
   app_home:
     home_tab_enabled: true
-    messages_tab_enabled: false
+    messages_tab_enabled: true
   bot_user:
     display_name: %s
     always_online: false

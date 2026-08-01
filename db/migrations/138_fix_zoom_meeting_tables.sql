@@ -1,10 +1,36 @@
--- Consolidated migration: Zoom meeting scheduling, occurrences, and sync state.
--- Replaces migrations: 044, 045, 046 (schema parts), 048, 049 (schema parts), 053, 064.
--- Produces the final state directly — no intermediate tables, DROPs, or RENAMEs.
+-- Fix zoom.scheduled_meetings and zoom.meeting_occurrences schema mismatch.
+--
+-- Migration 112 (before it was corrected) created these tables with column
+-- names and a column set that don't match what store/meetings.go expects.
+-- On pre-consolidation installs, 112 was a no-op (CREATE TABLE IF NOT EXISTS)
+-- and the correct schema from the old migrations is already in place.
+-- On new installs that ran the broken 112, the tables have the wrong schema.
+--
+-- This migration detects the broken schema (presence of 'scheduled_meeting_id'
+-- on meeting_occurrences) and rebuilds both tables. On installs with the
+-- correct schema, every statement is a no-op.
+--
+-- Also adds the missing 'phase' column to zoom.recording_data, which was
+-- omitted from consolidated migration 111 but is used by integrations/zoom/store.go.
 
---------------------------------------------------------------------
--- Scheduled meetings: one row per Zoom meeting or recurring series.
---------------------------------------------------------------------
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'zoom'
+          AND table_name = 'meeting_occurrences'
+          AND column_name = 'scheduled_meeting_id'
+    ) THEN
+        -- Broken 112 schema detected. The app cannot have successfully stored
+        -- any data (all inserts/queries reference non-existent columns), so
+        -- it is safe to drop and recreate.
+        ALTER TABLE IF EXISTS zoom.recording_data
+            DROP CONSTRAINT IF EXISTS fk_recording_data_scheduled_occurrence;
+        DROP TABLE IF EXISTS zoom.meeting_occurrences;
+        DROP TABLE IF EXISTS zoom.scheduled_meetings;
+    END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS zoom.scheduled_meetings (
     id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     integration_id        UUID NOT NULL REFERENCES integrations(id),
@@ -28,9 +54,6 @@ CREATE TABLE IF NOT EXISTS zoom.scheduled_meetings (
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
---------------------------------------------------------------------
--- Occurrences: one row per time slot (including single slot for one-off meetings).
---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS zoom.meeting_occurrences (
     id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     meeting_id            UUID NOT NULL REFERENCES zoom.scheduled_meetings(id) ON DELETE CASCADE,
@@ -43,27 +66,13 @@ CREATE TABLE IF NOT EXISTS zoom.meeting_occurrences (
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
---------------------------------------------------------------------
--- Sync state: one row per Zoom integration instance.
---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS zoom.meeting_sync_data (
-    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    integration_id    UUID NOT NULL REFERENCES integrations(id),
-    last_sync_at      TIMESTAMPTZ,
-    sync_token        TEXT,
-    sentinel_user_id  UUID REFERENCES users(id),
-    created_at        TIMESTAMPTZ DEFAULT NOW(),
-    updated_at        TIMESTAMPTZ DEFAULT NOW()
-);
-
---------------------------------------------------------------------
--- FK from recording_data.scheduled_occurrence_id → meeting_occurrences.
--- Column was created in 111; FK is added here because meeting_occurrences
--- is created in this migration (runs after 111).
---------------------------------------------------------------------
+-- Recreate FK from recording_data (dropped above if broken schema was detected).
 DO $$ BEGIN
     ALTER TABLE zoom.recording_data
         ADD CONSTRAINT fk_recording_data_scheduled_occurrence
         FOREIGN KEY (scheduled_occurrence_id) REFERENCES zoom.meeting_occurrences(id) ON DELETE SET NULL;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
+
+-- Add missing phase column to recording_data (omitted from migration 111).
+ALTER TABLE zoom.recording_data ADD COLUMN IF NOT EXISTS phase TEXT;
