@@ -30,6 +30,7 @@ func (p *SlackPlugin) Init(pctx plugin.PluginContext) error {
 	encKey := pctx.EncKey()
 
 	Init(pool, encKey)
+	StartRetryDrainer(pool)
 
 	pctx.SetNotifier(NewNotifier(pool))
 
@@ -64,6 +65,12 @@ func (p *SlackPlugin) Init(pctx plugin.PluginContext) error {
 	// Register API routes.
 	pctx.RegisterAuthRoute("GET", "/api/slack/channels", HandleListSlackChannels())
 	pctx.RegisterAuthRoute("POST", "/api/integrations/slack/manifest", handleManifest(pool, encKey))
+
+	// Admin UI: Slack retry queue (view, manual retry, delete).
+	pctx.RegisterNavItem("Slack Retry Queue", "/admin/slack/retry-queue")
+	pctx.RegisterAuthRoute("GET", "/admin/slack/retry-queue", HandleRetryQueuePage(pool))
+	pctx.RegisterAuthRoute("POST", "/admin/slack/retry-queue/{id}/retry", HandleRetryQueueRetry(pool))
+	pctx.RegisterAuthRoute("DELETE", "/admin/slack/retry-queue/{id}", HandleRetryQueueDelete(pool))
 
 	// Register scheduled jobs.
 	pctx.RegisterScheduledJob(

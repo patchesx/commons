@@ -25,6 +25,10 @@ type fakePost struct {
 
 func newFakeSlackServer(t *testing.T) (*httptest.Server, *fakeSlack) {
 	t.Helper()
+	// Disable throttling so tests run fast; restored on cleanup.
+	prev := sendInterval
+	sendInterval = 0
+	t.Cleanup(func() { sendInterval = prev })
 	fs := &fakeSlack{}
 	mux := http.NewServeMux()
 

@@ -2,8 +2,11 @@ package slack
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	slacklib "github.com/slack-go/slack"
@@ -127,6 +130,107 @@ var (
 	cachedClient *slacklib.Client
 )
 
+// sendInterval is the minimum spacing enforced between Slack message posts to
+// the same destination (channel or DM) to avoid hitting Slack's per-channel
+// rate limits, which cause message delivery failures.
+// Override in tests to keep them fast.
+var sendInterval = 5 * time.Second
+
+// defaultRetryAfter is the backoff applied when Slack returns a 429 without a
+// Retry-After header (e.g. a workspace-level message limit), where Slack gives
+// no explicit wait duration.
+var defaultRetryAfter = 5 * time.Second
+
+// sendThrottle tracks the send cadence for a single destination (channel or
+// DM): the minimum spacing between posts, plus any active rate-limit backoff
+// recorded after a Slack 429 response.
+type sendThrottle struct {
+	mu               sync.Mutex
+	lastTime         time.Time // last time a send was allowed through
+	rateLimitedUntil time.Time // if set, no sends to this destination until this time
+}
+
+var (
+	throttlesMu sync.Mutex
+	throttles   = map[string]*sendThrottle{}
+)
+
+// throttleFor returns the throttle for the given destination key, creating it
+// on first use. The key is a Slack channel ID for channel posts, or a user ID
+// for DMs (a DM channel is 1:1 with its user, so the user ID is a stable proxy
+// for the DM channel).
+func throttleFor(key string) *sendThrottle {
+	throttlesMu.Lock()
+	defer throttlesMu.Unlock()
+	t, ok := throttles[key]
+	if !ok {
+		t = &sendThrottle{}
+		throttles[key] = t
+	}
+	return t
+}
+
+// throttleSlackSend blocks until both the minimum spacing (sendInterval since
+// the last send) and any active rate-limit backoff for the destination have
+// elapsed, then records the send time. Per-destination locking means posts to
+// different channels proceed independently. Returns ctx.Err() if the context is
+// cancelled while waiting.
+func throttleSlackSend(ctx context.Context, key string) error {
+	t := throttleFor(key)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := time.Now()
+	// Earliest we may send: sendInterval after the last send.
+	waitUntil := t.lastTime.Add(sendInterval)
+	// Honor any active rate-limit backoff (e.g. from a 429 Retry-After).
+	if t.rateLimitedUntil.After(waitUntil) {
+		waitUntil = t.rateLimitedUntil
+	}
+	if waitUntil.After(now) {
+		select {
+		case <-time.After(waitUntil.Sub(now)):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	t.lastTime = time.Now()
+	return nil
+}
+
+// markRateLimited records that Slack rate-limited sends to the given
+// destination, blocking subsequent sends for at least retryAfter. Only extends
+// the backoff (never shortens an existing one set by a concurrent request).
+func markRateLimited(key string, retryAfter time.Duration) {
+	t := throttleFor(key)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if deadline := time.Now().Add(retryAfter); deadline.After(t.rateLimitedUntil) {
+		t.rateLimitedUntil = deadline
+	}
+}
+
+// recordRateLimitIfAny inspects an error returned by a Slack send call. If Slack
+// rate-limited the request (HTTP 429), it records the backoff for the
+// destination so subsequent sends wait rather than failing repeatedly: the
+// Retry-After duration when Slack provides one, or defaultRetryAfter otherwise.
+// The original error is returned unchanged for the caller to handle or log.
+func recordRateLimitIfAny(key string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var rl *slacklib.RateLimitedError
+	if errors.As(err, &rl) {
+		markRateLimited(key, rl.RetryAfter)
+		return err
+	}
+	var sce slacklib.StatusCodeError
+	if errors.As(err, &sce) && sce.Code == http.StatusTooManyRequests {
+		markRateLimited(key, defaultRetryAfter)
+		return err
+	}
+	return err
+}
+
 // Init stores the pool and encryption key for bot token lookups.
 // Must be called from main before the server starts.
 func Init(pool *pgxpool.Pool, encKey []byte) {
@@ -192,26 +296,44 @@ func PostDirectMessage(ctx context.Context, userID, text string) error {
 	return err
 }
 
-// PostChannelMessage posts a plain text message to a Slack channel by ID.
+// postChannelMessage throttles and posts a plain text message to a channel. It
+// records rate-limit backoffs but does NOT enqueue on failure — the caller (or
+// the retry drainer) decides what to do with the error.
+func postChannelMessage(ctx context.Context, client *slacklib.Client, channel, text string) error {
+	if err := throttleSlackSend(ctx, channel); err != nil {
+		return fmt.Errorf("throttle slack send: %w", err)
+	}
+	_, _, err := client.PostMessageContext(ctx, channel, slacklib.MsgOptionText(text, false))
+	return recordRateLimitIfAny(channel, err)
+}
+
+// PostChannelMessage posts a plain text message to a Slack channel by ID. On a
+// transient failure (rate limit or 5xx) the message is persisted to the retry
+// queue for redelivery; the original error is still returned.
 func PostChannelMessage(ctx context.Context, channel, text string) error {
 	client := getClient(ctx)
 	if client == nil {
 		return fmt.Errorf("bot_token not configured")
 	}
-	_, _, err := client.PostMessageContext(ctx, channel, slacklib.MsgOptionText(text, false))
+	err := postChannelMessage(ctx, client, channel, text)
+	if err != nil {
+		enqueueRetryableIfFailed(ctx, pkgPool, channel, false, text, nil, err)
+	}
 	return err
 }
 
-// SendDM opens a direct message channel with a Slack user and sends a message.
-// Errors are returned but callers should log and continue — a failed DM should
-// not crash the upload pipeline or interrupt other notifications.
-// SendDM opens a DM with userSlackID and posts a message.
-// Returns the DM channel ID and message timestamp so callers can update the message later.
-func SendDM(ctx context.Context, client *slacklib.Client, userSlackID, text string, blocks ...slacklib.Block) (channelID, timestamp string, err error) {
+// sendDM throttles, opens a DM channel, and posts a message. It records
+// rate-limit backoffs but does NOT enqueue on failure — the caller (or the
+// retry drainer) decides what to do with the error.
+func sendDM(ctx context.Context, client *slacklib.Client, userSlackID, text string, blocks ...slacklib.Block) (channelID, timestamp string, err error) {
+	if err := throttleSlackSend(ctx, userSlackID); err != nil {
+		return "", "", fmt.Errorf("throttle slack send: %w", err)
+	}
 	ch, _, _, err := client.OpenConversationContext(ctx, &slacklib.OpenConversationParameters{
 		Users: []string{userSlackID},
 	})
 	if err != nil {
+		recordRateLimitIfAny(userSlackID, err)
 		return "", "", fmt.Errorf("open DM with %s: %w", userSlackID, err)
 	}
 
@@ -221,5 +343,17 @@ func SendDM(ctx context.Context, client *slacklib.Client, userSlackID, text stri
 	}
 
 	_, ts, err := client.PostMessageContext(ctx, ch.ID, opts...)
-	return ch.ID, ts, err
+	return ch.ID, ts, recordRateLimitIfAny(userSlackID, err)
+}
+
+// SendDM opens a DM with userSlackID and posts a message. On a transient
+// failure (rate limit or 5xx) the message is persisted to the retry queue so
+// the drainer can redeliver it; the original error is still returned.
+// Returns the DM channel ID and message timestamp so callers can update the message later.
+func SendDM(ctx context.Context, client *slacklib.Client, userSlackID, text string, blocks ...slacklib.Block) (channelID, timestamp string, err error) {
+	chID, ts, err := sendDM(ctx, client, userSlackID, text, blocks...)
+	if err != nil {
+		enqueueRetryableIfFailed(ctx, pkgPool, userSlackID, true, text, blocks, err)
+	}
+	return chID, ts, err
 }

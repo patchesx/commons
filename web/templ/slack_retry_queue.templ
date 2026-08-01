@@ -1,0 +1,113 @@
+package admintempl
+
+import (
+	"fmt"
+	"strconv"
+	"time"
+)
+
+// RetryQueueView holds the data needed to render a row in the Slack retry queue table.
+type RetryQueueView struct {
+	ID            string
+	Destination   string
+	IsDM          bool
+	Text          string
+	HasBlocks     bool
+	AttemptCount  int
+	MaxAttempts   int
+	NextAttemptAt time.Time
+	LastError     string
+	CreatedAt     time.Time
+	Exhausted     bool // attempt_count >= max_attempts (dead-lettered)
+}
+
+templ SlackRetryQueuePage(msgs []RetryQueueView) {
+	@Layout("Slack Retry Queue", "/admin/slack/retry-queue") {
+		<div>
+			<h1 class="title is-4 mb-3">Slack Retry Queue</h1>
+			@PageHelp() {
+				Messages that failed to send due to transient errors (rate limits or Slack server errors) and are awaiting retry. Exhausted messages gave up after reaching the max attempt count — use Retry to give a message another chance, or Delete to discard it.
+			}
+			@SlackRetryQueueTable(msgs)
+		</div>
+	}
+}
+
+templ SlackRetryQueueTable(msgs []RetryQueueView) {
+	<div id="slack-retry-table">
+		<div class="card">
+			<div class="table-container">
+				<table class="table is-fullwidth is-hoverable is-narrow mb-0">
+					<thead>
+						<tr>
+							<th>To</th>
+							<th>Message</th>
+							<th>Attempts</th>
+							<th class="is-hidden-mobile">Next Attempt</th>
+							<th class="is-hidden-mobile">Last Error</th>
+							<th></th>
+						</tr>
+					</thead>
+					if len(msgs) == 0 {
+						<tbody>
+							<tr>
+								<td colspan="6" class="has-text-centered py-6">
+									@EmptyState("No queued messages. The retry queue is empty.")
+								</td>
+							</tr>
+						</tbody>
+					}
+					for _, m := range msgs {
+						<tbody>
+							<tr>
+								<td style="white-space: nowrap">
+									if m.IsDM {
+										@StatusBadge("DM", "blue")
+									} else {
+										@StatusBadge("Channel", "gray")
+									}
+									<div class="is-family-monospace is-size-7 mt-1">{ m.Destination }</div>
+								</td>
+								<td style="max-width: 24rem">
+									<div class="is-size-7" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title={ m.Text }>
+										{ m.Text }
+									</div>
+									if m.HasBlocks {
+										<div class="mt-1">
+											@StatusBadge("blocks", "yellow")
+										</div>
+									}
+								</td>
+								<td style="white-space: nowrap">
+									{ strconv.Itoa(m.AttemptCount) } / { strconv.Itoa(m.MaxAttempts) }
+									if m.Exhausted {
+										<div class="mt-1">
+											@StatusBadge("exhausted", "red")
+										</div>
+									}
+								</td>
+								<td class="is-hidden-mobile is-size-7 has-text-grey" style="white-space: nowrap">
+									{ m.NextAttemptAt.Format("Jan 2 3:04pm") }
+								</td>
+								<td class="is-hidden-mobile is-size-7 has-text-grey" style="max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title={ m.LastError }>
+									{ m.LastError }
+								</td>
+								<td class="has-text-right" style="white-space: nowrap">
+									<div class="buttons are-small is-justify-content-flex-end mb-0">
+										<button
+											hx-post={ "/admin/slack/retry-queue/" + m.ID + "/retry" }
+											hx-target="#slack-retry-table"
+											hx-swap="outerHTML"
+											class="button is-small is-primary is-outlined"
+										>Retry</button>
+										@ConfirmDeleteButton(fmt.Sprintf("htmx.ajax('DELETE', '/admin/slack/retry-queue/%s', {target: '#slack-retry-table', swap: 'outerHTML'})", m.ID))
+									</div>
+								</td>
+							</tr>
+						</tbody>
+					}
+				</table>
+			</div>
+		</div>
+	</div>
+}

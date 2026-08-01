@@ -88,7 +88,9 @@ func sendSyncImportReminder(ctx context.Context, pool *pgxpool.Pool, encKey []by
 		occ.Topic, startFormatted, occ.JoinURL,
 	)
 
-	if _, _, err := client.PostMessageContext(ctx, channel, slacklib.MsgOptionText(text, false)); err != nil {
+	err := postChannelMessage(ctx, client, channel, text)
+	enqueueRetryableIfFailed(ctx, pool, channel, false, text, nil, err)
+	if err != nil {
 		log.Printf("slack/reminders: channel post for occurrence %s: %v", occ.OccurrenceID, err)
 	}
 }
