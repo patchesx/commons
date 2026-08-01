@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS user_credentials (
     id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id                 UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     password_hash           TEXT,
-    password_reset_required BOOLEAN NOT NULL DEFAULT FALSE,
+    force_password_reset    BOOLEAN NOT NULL DEFAULT FALSE,
     last_login_at           TIMESTAMPTZ,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ DEFAULT NOW(),

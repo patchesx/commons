@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS user_identities (
     user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     provider        TEXT NOT NULL,
     external_id     TEXT NOT NULL,
+    username        TEXT,
+    display_name    TEXT,
     external_name   TEXT,
     external_email  TEXT,
     platform_status TEXT NOT NULL DEFAULT 'unknown',
