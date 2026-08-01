@@ -93,3 +93,22 @@ CREATE TABLE IF NOT EXISTS integration_config_schema (
     required         BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (integration_type, key)
 );
+
+-- 8. Auth config seeds — self-registration flag (058) and default role (060).
+--    Moved from 102_auth.sql: config_schema/config_store are created above,
+--    so these INSERTs must run after this migration, not before.
+INSERT INTO config_schema (service, key, label, description, sensitive, required)
+VALUES
+    ('auth', 'allow_registration', 'Allow Self-Registration',
+     'When enabled, anyone can create an account at /register. Disable for admin-provisioned-only orgs.',
+     FALSE, FALSE),
+    ('auth', 'default_role_id', 'Default Member Role',
+     'Role assigned to new self-registered users. Leave empty to assign no role (admin assigns roles later).',
+     FALSE, FALSE)
+ON CONFLICT (service, key) DO NOTHING;
+
+INSERT INTO config_store (service, key, value, sensitive)
+VALUES
+    ('auth', 'allow_registration', 'false', FALSE),
+    ('auth', 'default_role_id', '', FALSE)
+ON CONFLICT (service, key) DO NOTHING;
