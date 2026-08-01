@@ -369,7 +369,10 @@ func configInputPlaceholder(e ConfigEntryView) string {
 // AddPluginModalContent renders the "Add Plugin" modal.
 templ AddPluginModalContent(available []store.Integration) {
 	<div class="box">
-		<h2 id="integrations-modal-title" class="title is-5 mb-4">Add Plugin</h2>
+		<div class="is-flex is-justify-content-space-between is-align-items-center mb-4">
+			<h2 id="integrations-modal-title" class="title is-5 mb-0">Add Plugin</h2>
+			<button type="button" onclick="document.getElementById('integrations-modal').close()" class="delete" aria-label="Close"></button>
+		</div>
 		<div x-data="{ selectedID: '' }">
 			<div class="field">
 				<label class="label">Plugin</label>

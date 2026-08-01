@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS integrations (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     type       TEXT NOT NULL,
     name       TEXT NOT NULL,
-    enabled    BOOLEAN NOT NULL DEFAULT TRUE,
+    enabled    BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

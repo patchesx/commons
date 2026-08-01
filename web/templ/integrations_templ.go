@@ -810,7 +810,7 @@ func AddPluginModalContent(available []store.Integration) templ.Component {
 			templ_7745c5c3_Var30 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "<div class=\"box\"><h2 id=\"integrations-modal-title\" class=\"title is-5 mb-4\">Add Plugin</h2><div x-data=\"{ selectedID: '' }\"><div class=\"field\"><label class=\"label\">Plugin</label><div class=\"control\"><div class=\"select is-fullwidth\"><select name=\"integration_id\" x-model=\"selectedID\" hx-get=\"/admin/fragments/integrations/config-fields\" hx-include=\"[name='integration_id']\" hx-target=\"#plugin-config-fields\" hx-trigger=\"change\"><option value=\"\">— Select a plugin —</option> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "<div class=\"box\"><div class=\"is-flex is-justify-content-space-between is-align-items-center mb-4\"><h2 id=\"integrations-modal-title\" class=\"title is-5 mb-0\">Add Plugin</h2><button type=\"button\" onclick=\"document.getElementById('integrations-modal').close()\" class=\"delete\" aria-label=\"Close\"></button></div><div x-data=\"{ selectedID: '' }\"><div class=\"field\"><label class=\"label\">Plugin</label><div class=\"control\"><div class=\"select is-fullwidth\"><select name=\"integration_id\" x-model=\"selectedID\" hx-get=\"/admin/fragments/integrations/config-fields\" hx-include=\"[name='integration_id']\" hx-target=\"#plugin-config-fields\" hx-trigger=\"change\"><option value=\"\">— Select a plugin —</option> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -822,7 +822,7 @@ func AddPluginModalContent(available []store.Integration) templ.Component {
 			var templ_7745c5c3_Var31 string
 			templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(integ.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 388, Col: 32}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 391, Col: 32}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 			if templ_7745c5c3_Err != nil {
@@ -835,7 +835,7 @@ func AddPluginModalContent(available []store.Integration) templ.Component {
 			var templ_7745c5c3_Var32 string
 			templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(integ.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 388, Col: 47}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 391, Col: 47}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 			if templ_7745c5c3_Err != nil {
@@ -883,7 +883,7 @@ func AddPluginConfigFields(integ store.Integration, entries []ConfigEntryView) t
 		var templ_7745c5c3_Var34 string
 		templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(integ.ID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 405, Col: 61}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 408, Col: 61}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 		if templ_7745c5c3_Err != nil {
@@ -896,7 +896,7 @@ func AddPluginConfigFields(integ store.Integration, entries []ConfigEntryView) t
 		var templ_7745c5c3_Var35 string
 		templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(integ.Type)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 406, Col: 65}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 409, Col: 65}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 		if templ_7745c5c3_Err != nil {
@@ -924,7 +924,7 @@ func AddPluginConfigFields(integ store.Integration, entries []ConfigEntryView) t
 				var templ_7745c5c3_Var36 string
 				templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(e.Label)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 414, Col: 16}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 417, Col: 16}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 				if templ_7745c5c3_Err != nil {
@@ -952,7 +952,7 @@ func AddPluginConfigFields(integ store.Integration, entries []ConfigEntryView) t
 					var templ_7745c5c3_Var37 string
 					templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinStringErrs(e.Description)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 420, Col: 43}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 423, Col: 43}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
 					if templ_7745c5c3_Err != nil {
@@ -970,7 +970,7 @@ func AddPluginConfigFields(integ store.Integration, entries []ConfigEntryView) t
 				var templ_7745c5c3_Var38 string
 				templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(addPluginInputType(e))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 424, Col: 36}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 427, Col: 36}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 				if templ_7745c5c3_Err != nil {
@@ -983,7 +983,7 @@ func AddPluginConfigFields(integ store.Integration, entries []ConfigEntryView) t
 				var templ_7745c5c3_Var39 string
 				templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs("cfg_" + e.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 425, Col: 29}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 428, Col: 29}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 				if templ_7745c5c3_Err != nil {
