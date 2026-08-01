@@ -328,16 +328,24 @@ func buildIntegrationListData(ctx context.Context, pool *pgxpool.Pool, encKey []
 					hasConfig = true
 				}
 			}
-			_ = hasConfig
-			items = append(items, admintempl.IntegrationListItemData{
-				Integration: store.Integration{
+			if integ.Enabled || hasConfig {
+				items = append(items, admintempl.IntegrationListItemData{
+					Integration: store.Integration{
+						ID:      integ.ID,
+						Type:    spec.ConfigService,
+						Name:    spec.Name,
+						Enabled: integ.Enabled,
+					},
+					HasMissing: hasMissing,
+				})
+			} else {
+				available = append(available, store.Integration{
 					ID:      integ.ID,
 					Type:    spec.ConfigService,
 					Name:    spec.Name,
 					Enabled: integ.Enabled,
-				},
-				HasMissing: hasMissing,
-			})
+				})
+			}
 			continue
 		}
 

@@ -8,8 +8,12 @@
 CREATE TABLE IF NOT EXISTS calendars (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name          TEXT NOT NULL,
+    slug          TEXT UNIQUE,
+    description   TEXT,
     ical_url      TEXT,
+    timezone      TEXT NOT NULL DEFAULT '',
     display_order INT NOT NULL DEFAULT 0,
+    created_by    UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at    TIMESTAMPTZ DEFAULT NOW(),
     updated_at    TIMESTAMPTZ DEFAULT NOW()
 );
@@ -24,6 +28,7 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     title       TEXT NOT NULL,
     description TEXT,
     location    TEXT,
+    url         TEXT,
     start_time  TIMESTAMPTZ NOT NULL,
     end_time    TIMESTAMPTZ,
     all_day     BOOLEAN NOT NULL DEFAULT FALSE,
