@@ -147,3 +147,171 @@ func TestUpdateUserSelectedCalendar(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, cleared.SelectedCalendarID)
 }
+
+func TestListUsersPageAlphabeticalOrder(t *testing.T) {
+	ctx := context.Background()
+	pool := testhelpers.SetupTestDB(t)
+
+	// Create users out of alphabetical order.
+	_, err := GetOrCreateUserByIdentity(ctx, pool, "slack", "U_ZOE", "zoe", "Zoe Zhang")
+	require.NoError(t, err)
+	_, err = GetOrCreateUserByIdentity(ctx, pool, "slack", "U_ALICE", "alice", "Alice Adams")
+	require.NoError(t, err)
+	_, err = GetOrCreateUserByIdentity(ctx, pool, "slack", "U_BOB", "bob", "Bob Brown")
+	require.NoError(t, err)
+
+	users, err := ListUsersPage(ctx, pool, "", "", 10, 0)
+	require.NoError(t, err)
+	require.Len(t, users, 3)
+	assert.Equal(t, "Alice Adams", users[0].DisplayName)
+	assert.Equal(t, "Bob Brown", users[1].DisplayName)
+	assert.Equal(t, "Zoe Zhang", users[2].DisplayName)
+
+	total, err := CountUsersPage(ctx, pool, "", "")
+	require.NoError(t, err)
+	assert.Equal(t, 3, total)
+}
+
+func TestListUsersPageSearchByName(t *testing.T) {
+	ctx := context.Background()
+	pool := testhelpers.SetupTestDB(t)
+
+	_, err := GetOrCreateUserByIdentity(ctx, pool, "slack", "U_1", "u1", "Alice Adams")
+	require.NoError(t, err)
+	_, err = GetOrCreateUserByIdentity(ctx, pool, "slack", "U_2", "u2", "Bob Brown")
+	require.NoError(t, err)
+	_, err = GetOrCreateUserByIdentity(ctx, pool, "slack", "U_3", "u3", "Alicia Keys")
+	require.NoError(t, err)
+
+	// Case-insensitive partial match on display_name.
+	users, err := ListUsersPage(ctx, pool, "", "ali", 10, 0)
+	require.NoError(t, err)
+	require.Len(t, users, 2)
+	assert.Equal(t, "Alice Adams", users[0].DisplayName)
+	assert.Equal(t, "Alicia Keys", users[1].DisplayName)
+
+	total, err := CountUsersPage(ctx, pool, "", "ali")
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+}
+
+func TestListUsersPageSearchByEmail(t *testing.T) {
+	ctx := context.Background()
+	pool := testhelpers.SetupTestDB(t)
+
+	u1, err := GetOrCreateUserByIdentity(ctx, pool, "slack", "U_E1", "u1", "Alice Adams")
+	require.NoError(t, err)
+	require.NoError(t, UpdateUserEmail(ctx, pool, u1.ID, "alice@example.com"))
+
+	u2, err := GetOrCreateUserByIdentity(ctx, pool, "slack", "U_E2", "u2", "Bob Brown")
+	require.NoError(t, err)
+	require.NoError(t, UpdateUserEmail(ctx, pool, u2.ID, "bob@example.com"))
+
+	// Search by email fragment — should only match Alice.
+	users, err := ListUsersPage(ctx, pool, "", "alice@example", 10, 0)
+	require.NoError(t, err)
+	require.Len(t, users, 1)
+	assert.Equal(t, "Alice Adams", users[0].DisplayName)
+
+	// Search fragment matching both emails.
+	users, err = ListUsersPage(ctx, pool, "", "example.com", 10, 0)
+	require.NoError(t, err)
+	require.Len(t, users, 2)
+}
+
+func TestListUsersPageSearchNoMatch(t *testing.T) {
+	ctx := context.Background()
+	pool := testhelpers.SetupTestDB(t)
+
+	_, err := GetOrCreateUserByIdentity(ctx, pool, "slack", "U_NM", "u", "Alice Adams")
+	require.NoError(t, err)
+
+	users, err := ListUsersPage(ctx, pool, "", "nonexistent", 10, 0)
+	require.NoError(t, err)
+	assert.Empty(t, users)
+
+	total, err := CountUsersPage(ctx, pool, "", "nonexistent")
+	require.NoError(t, err)
+	assert.Equal(t, 0, total)
+}
+
+func TestListUsersPageStatusFilter(t *testing.T) {
+	ctx := context.Background()
+	pool := testhelpers.SetupTestDB(t)
+
+	_, err := GetOrCreateUserByIdentity(ctx, pool, "slack", "U_S1", "u1", "Alice Adams")
+	require.NoError(t, err)
+	require.NoError(t, UpdateIdentityStatus(ctx, pool, "slack", "U_S1", "active"))
+
+	_, err = GetOrCreateUserByIdentity(ctx, pool, "slack", "U_S2", "u2", "Bob Brown")
+	require.NoError(t, err)
+	require.NoError(t, UpdateIdentityStatus(ctx, pool, "slack", "U_S2", "deactivated"))
+
+	users, err := ListUsersPage(ctx, pool, "active", "", 10, 0)
+	require.NoError(t, err)
+	require.Len(t, users, 1)
+	assert.Equal(t, "Alice Adams", users[0].DisplayName)
+	assert.Equal(t, "active", users[0].PlatformStatus)
+
+	total, err := CountUsersPage(ctx, pool, "active", "")
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+}
+
+func TestListUsersPageStatusAndSearchCombined(t *testing.T) {
+	ctx := context.Background()
+	pool := testhelpers.SetupTestDB(t)
+
+	_, err := GetOrCreateUserByIdentity(ctx, pool, "slack", "U_C1", "u1", "Alice Adams")
+	require.NoError(t, err)
+	require.NoError(t, UpdateIdentityStatus(ctx, pool, "slack", "U_C1", "active"))
+
+	_, err = GetOrCreateUserByIdentity(ctx, pool, "slack", "U_C2", "u2", "Alice Brown")
+	require.NoError(t, err)
+	require.NoError(t, UpdateIdentityStatus(ctx, pool, "slack", "U_C2", "deactivated"))
+
+	// "Alice" matches both names, but only one is active.
+	users, err := ListUsersPage(ctx, pool, "active", "alice", 10, 0)
+	require.NoError(t, err)
+	require.Len(t, users, 1)
+	assert.Equal(t, "Alice Adams", users[0].DisplayName)
+
+	total, err := CountUsersPage(ctx, pool, "active", "alice")
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+}
+
+func TestListUsersPagePagination(t *testing.T) {
+	ctx := context.Background()
+	pool := testhelpers.SetupTestDB(t)
+
+	// Create 5 users alphabetically: A, B, C, D, E.
+	for _, name := range []string{"A", "B", "C", "D", "E"} {
+		_, err := GetOrCreateUserByIdentity(ctx, pool, "slack", "U_"+name, name, name)
+		require.NoError(t, err)
+	}
+
+	// Page 1: limit=2, offset=0 → A, B.
+	users, err := ListUsersPage(ctx, pool, "", "", 2, 0)
+	require.NoError(t, err)
+	require.Len(t, users, 2)
+	assert.Equal(t, "A", users[0].DisplayName)
+	assert.Equal(t, "B", users[1].DisplayName)
+
+	// Page 2: limit=2, offset=2 → C, D.
+	users, err = ListUsersPage(ctx, pool, "", "", 2, 2)
+	require.NoError(t, err)
+	require.Len(t, users, 2)
+	assert.Equal(t, "C", users[0].DisplayName)
+	assert.Equal(t, "D", users[1].DisplayName)
+
+	// Page 3: limit=2, offset=4 → E (last page, partial).
+	users, err = ListUsersPage(ctx, pool, "", "", 2, 4)
+	require.NoError(t, err)
+	require.Len(t, users, 1)
+	assert.Equal(t, "E", users[0].DisplayName)
+
+	total, err := CountUsersPage(ctx, pool, "", "")
+	require.NoError(t, err)
+	assert.Equal(t, 5, total)
+}

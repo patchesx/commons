@@ -1,5 +1,10 @@
 package admintempl
 
+import (
+	"net/url"
+	"strconv"
+)
+
 // GroupRef is a name+ID pair for a role group, used in user group cells.
 type GroupRef struct {
 	ID          string
@@ -60,27 +65,67 @@ func userStatusLabel(status string) string {
 	}
 }
 
-templ UsersPage(users []UserViewRow, statusFilter string) {
+// usersTableURL builds the HTMX URL for the users-table fragment, preserving
+// the current status and search filters across page navigation.
+func usersTableURL(page int, status, search string) string {
+	q := url.Values{}
+	q.Set("page", strconv.Itoa(page))
+	if status != "" {
+		q.Set("status", status)
+	}
+	if search != "" {
+		q.Set("q", search)
+	}
+	return "/admin/fragments/users-table?" + q.Encode()
+}
+
+func usersPluralize(n int) string {
+	if n == 1 {
+		return "user"
+	}
+	return "users"
+}
+
+templ UsersPage(users []UserViewRow, statusFilter, search string, page, totalPages, total int) {
 	@Layout("Users", "/admin/users") {
 		<div>
 			<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
 				<h1 class="title is-4 mb-0">Users</h1>
-				<div class="control">
-					<label for="user-status-filter" class="is-sr-only">Filter by status</label>
-					<div class="select is-small">
-						<select
-							id="user-status-filter"
-							name="status"
+				<div class="field is-grouped">
+					<div class="control">
+						<label for="user-search-input" class="is-sr-only">Search by name or email</label>
+						<input
+							id="user-search-input"
+							name="q"
+							type="search"
+							value={ search }
+							placeholder="Search name or email…"
+							class="input is-small"
 							hx-get="/admin/fragments/users-table"
-							hx-trigger="change"
+							hx-trigger="keyup changed delay:300ms"
 							hx-target="#users-table"
 							hx-swap="outerHTML"
-						>
-							<option value="" selected?={ statusFilter == "" }>All statuses</option>
-							<option value="active" selected?={ statusFilter == "active" }>Active</option>
-							<option value="invited" selected?={ statusFilter == "invited" }>Invited</option>
-							<option value="deactivated" selected?={ statusFilter == "deactivated" }>Deactivated</option>
-						</select>
+							hx-include="#user-status-filter"
+						/>
+					</div>
+					<div class="control">
+						<label for="user-status-filter" class="is-sr-only">Filter by status</label>
+						<div class="select is-small">
+							<select
+								id="user-status-filter"
+								name="status"
+								hx-get="/admin/fragments/users-table"
+								hx-trigger="change"
+								hx-target="#users-table"
+								hx-swap="outerHTML"
+								hx-include="#user-search-input"
+							>
+								<option value="" selected?={ statusFilter == "" }>All statuses</option>
+								<option value="active" selected?={ statusFilter == "active" }>Active</option>
+								<option value="invited" selected?={ statusFilter == "invited" }>Invited</option>
+								<option value="deactivated" selected?={ statusFilter == "deactivated" }>Deactivated</option>
+							</select>
+						</div>
 					</div>
 				</div>
 			</div>
@@ -97,7 +142,7 @@ templ UsersPage(users []UserViewRow, statusFilter string) {
 							hx-post="/admin/members/create"
 							hx-target="#import-result"
 							hx-swap="innerHTML"
-							hx-on:htmx:after-request="if(event.detail.successful) { this.reset(); htmx.ajax('GET', '/admin/fragments/users-table', {target: '#users-table', swap: 'outerHTML'}); }"
+							hx-on:htmx:after-request="if(event.detail.successful) { this.reset(); htmx.ajax('GET', document.getElementById('users-table').dataset.usersTableUrl, {target: '#users-table', swap: 'outerHTML'}); }"
 						>
 							<div class="field is-grouped is-flex-wrap-wrap">
 								<div class="control">
@@ -125,7 +170,7 @@ templ UsersPage(users []UserViewRow, statusFilter string) {
 							hx-target="#import-result"
 							hx-swap="innerHTML"
 							hx-encoding="multipart/form-data"
-							hx-on:htmx:after-request="if(event.detail.successful) htmx.ajax('GET', '/admin/fragments/users-table', {target: '#users-table', swap: 'outerHTML'})"
+							hx-on:htmx:after-request="if(event.detail.successful) htmx.ajax('GET', document.getElementById('users-table').dataset.usersTableUrl, {target: '#users-table', swap: 'outerHTML'})"
 						>
 							<div class="field is-grouped">
 								<div class="control">
@@ -142,56 +187,71 @@ templ UsersPage(users []UserViewRow, statusFilter string) {
 			@PageHelp() {
 				All members who have opened the App Home at least once. Assign roles and manage access here. Accounts are created automatically on first visit.
 			}
-			@UsersTable(users)
+			@UsersTable(users, statusFilter, search, page, totalPages, total)
 		</div>
 		<!-- Dialog for promote-to-admin modal -->
 		<dialog id="users-modal" aria-labelledby="promote-dialog-title"></dialog>
 	}
 }
 
-templ UsersTable(users []UserViewRow) {
-	<div id="users-table">
-		<div class="card">
-			<div class="table-container">
-				<table class="table is-fullwidth is-hoverable is-narrow mb-0">
-					<thead>
-						<tr>
-							<th>Name</th>
-							<th class="is-hidden-mobile">Status</th>
-							<th class="is-hidden-mobile">Role Group</th>
-							<th>Actions</th>
-						</tr>
-					</thead>
-					<tbody>
-						for _, user := range users {
-							<tr>
-								<td>
-									<div class="has-text-weight-semibold">{ user.DisplayName }</div>
-									if user.Email != "" {
-										<div class="is-size-7 has-text-grey">{ user.Email }</div>
-									}
-									<div class="is-hidden-tablet mt-1">
-										@StatusBadge(userStatusLabel(user.PlatformStatus), userStatusColor(user.PlatformStatus))
-									</div>
-									<div class="is-hidden-tablet mt-2">
-										@userGroupCell(user.ID, user.Group, user.AllGroups)
-									</div>
-								</td>
-								<td class="is-hidden-mobile">
-									@StatusBadge(userStatusLabel(user.PlatformStatus), userStatusColor(user.PlatformStatus))
-								</td>
-								<td class="is-hidden-mobile">
-									@userGroupCell(user.ID, user.Group, user.AllGroups)
-								</td>
-								<td>
-									@userActionCell(user.ID, user.DisplayName, user.Email, user.IsWebAdmin, user.HasWebIdentity)
-								</td>
-							</tr>
-						}
-					</tbody>
-				</table>
+templ UsersTable(users []UserViewRow, statusFilter, search string, page, totalPages, total int) {
+	<div id="users-table" data-users-table-url={ usersTableURL(page, statusFilter, search) }>
+		if len(users) == 0 {
+			<div class="card">
+				<div class="card-content">
+					if search != "" {
+						@EmptyState("No users match your search.")
+					} else {
+						@EmptyState("No users found.")
+					}
+				</div>
 			</div>
-		</div>
+		} else {
+			<div class="card">
+				<div class="table-container">
+					<table class="table is-fullwidth is-hoverable is-narrow mb-0">
+						<thead>
+							<tr>
+								<th>Name</th>
+								<th class="is-hidden-mobile">Status</th>
+								<th class="is-hidden-mobile">Role Group</th>
+								<th>Actions</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, user := range users {
+								<tr>
+									<td>
+										<div class="has-text-weight-semibold">{ user.DisplayName }</div>
+										if user.Email != "" {
+											<div class="is-size-7 has-text-grey">{ user.Email }</div>
+										}
+										<div class="is-hidden-tablet mt-1">
+											@StatusBadge(userStatusLabel(user.PlatformStatus), userStatusColor(user.PlatformStatus))
+										</div>
+										<div class="is-hidden-tablet mt-2">
+											@userGroupCell(user.ID, user.Group, user.AllGroups)
+										</div>
+									</td>
+									<td class="is-hidden-mobile">
+										@StatusBadge(userStatusLabel(user.PlatformStatus), userStatusColor(user.PlatformStatus))
+									</td>
+									<td class="is-hidden-mobile">
+										@userGroupCell(user.ID, user.Group, user.AllGroups)
+									</td>
+									<td>
+										@userActionCell(user.ID, user.DisplayName, user.Email, user.IsWebAdmin, user.HasWebIdentity)
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+				@PaginationNav(page, totalPages, usersTableURL(page-1, statusFilter, search), usersTableURL(page+1, statusFilter, search), "users-table") {
+					<p class="is-size-7 has-text-grey">{ strconv.Itoa(total) } { usersPluralize(total) }</p>
+				}
+			</div>
+		}
 	</div>
 }
 
@@ -199,7 +259,7 @@ templ userGroupCell(userID string, group *GroupRef, allGroups []GroupRef) {
 	<div class="select is-small">
 		<select
 			aria-label="Role group"
-			x-on:change={ `if ($event.target.value) { htmx.ajax('POST', '/admin/fragments/users/` + userID + `/group', { values: { groupId: $event.target.value }, swap: 'none' }).then(() => htmx.ajax('GET', '/admin/fragments/users-table', {target: '#users-table', swap: 'outerHTML'})) } else { htmx.ajax('DELETE', '/admin/fragments/users/` + userID + `/group', { swap: 'none' }).then(() => htmx.ajax('GET', '/admin/fragments/users-table', {target: '#users-table', swap: 'outerHTML'})) }` }
+			x-on:change={ `if ($event.target.value) { htmx.ajax('POST', '/admin/fragments/users/` + userID + `/group', { values: { groupId: $event.target.value }, swap: 'none' }).then(() => htmx.ajax('GET', document.getElementById('users-table').dataset.usersTableUrl, {target: '#users-table', swap: 'outerHTML'})) } else { htmx.ajax('DELETE', '/admin/fragments/users/` + userID + `/group', { swap: 'none' }).then(() => htmx.ajax('GET', document.getElementById('users-table').dataset.usersTableUrl, {target: '#users-table', swap: 'outerHTML'})) }` }
 		>
 			<option value="">— None —</option>
 			for _, g := range allGroups {

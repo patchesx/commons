@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,14 +15,26 @@ import (
 	admintempl "commons/web/templ"
 )
 
-func loadUsersPageData(ctx context.Context, pool *pgxpool.Pool, statusFilter string) ([]admintempl.UserViewRow, error) {
-	users, err := store.ListUsers(ctx, pool)
+const usersPageLimit = 25
+
+func loadUsersPageData(ctx context.Context, pool *pgxpool.Pool, statusFilter, search string, page int) ([]admintempl.UserViewRow, int, int, error) {
+	total, err := store.CountUsersPage(ctx, pool, statusFilter, search)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
+	offset := (page - 1) * usersPageLimit
+	users, err := store.ListUsersPage(ctx, pool, statusFilter, search, usersPageLimit, offset)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	totalPages := (total + usersPageLimit - 1) / usersPageLimit
+	if totalPages < 1 {
+		totalPages = 1
+	}
+
 	allGroups, err := store.ListRoleGroups(ctx, pool)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	groupRefs := make([]admintempl.GroupRef, len(allGroups))
 	for i, g := range allGroups {
@@ -29,7 +42,7 @@ func loadUsersPageData(ctx context.Context, pool *pgxpool.Pool, statusFilter str
 	}
 	adminIDs, err := store.ListWebAdminUserIDs(ctx, pool)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	webAdminSet := map[string]bool{}
 	for _, id := range adminIDs {
@@ -38,14 +51,11 @@ func loadUsersPageData(ctx context.Context, pool *pgxpool.Pool, statusFilter str
 
 	webIdentitySet, err := store.ListWebIdentityUserIDs(ctx, pool)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 
-	var result []admintempl.UserViewRow
+	result := make([]admintempl.UserViewRow, 0, len(users))
 	for _, u := range users {
-		if statusFilter != "" && u.PlatformStatus != statusFilter {
-			continue
-		}
 		var groupRef *admintempl.GroupRef
 		group, err := store.GetUserGroup(ctx, pool, u.ID)
 		if err == nil && group != nil {
@@ -66,32 +76,46 @@ func loadUsersPageData(ctx context.Context, pool *pgxpool.Pool, statusFilter str
 			AllGroups:      groupRefs,
 		})
 	}
-	return result, nil
+	return result, total, totalPages, nil
 }
 
 func (d Deps) UsersPage() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		statusFilter := r.URL.Query().Get("status")
-		rows, err := loadUsersPageData(r.Context(), d.Pool, statusFilter)
+		search := strings.TrimSpace(r.URL.Query().Get("q"))
+		page := parseUsersPageParam(r)
+		rows, total, totalPages, err := loadUsersPageData(r.Context(), d.Pool, statusFilter, search, page)
 		if err != nil {
 			http.Error(w, "failed to load users", http.StatusInternalServerError)
 			return
 		}
-		admintempl.UsersPage(rows, statusFilter).Render(r.Context(), w)
+		admintempl.UsersPage(rows, statusFilter, search, page, totalPages, total).Render(r.Context(), w)
 	}
 }
 
 func (d Deps) UsersTable() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		statusFilter := r.URL.Query().Get("status")
-		rows, err := loadUsersPageData(r.Context(), d.Pool, statusFilter)
+		search := strings.TrimSpace(r.URL.Query().Get("q"))
+		page := parseUsersPageParam(r)
+		rows, total, totalPages, err := loadUsersPageData(r.Context(), d.Pool, statusFilter, search, page)
 		if err != nil {
 			FragmentError(w, r, "failed to load users")
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
-		admintempl.UsersTable(rows).Render(r.Context(), w)
+		admintempl.UsersTable(rows, statusFilter, search, page, totalPages, total).Render(r.Context(), w)
 	}
+}
+
+// parseUsersPageParam extracts the "page" query parameter, defaulting to 1 when
+// absent or invalid.
+func parseUsersPageParam(r *http.Request) int {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	return page
 }
 
 func (d Deps) CreateMember() http.HandlerFunc {

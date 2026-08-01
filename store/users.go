@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -476,6 +478,104 @@ func ListUsers(ctx context.Context, pool *pgxpool.Pool) ([]User, error) {
 		WHERE NOT u.bot
 		ORDER BY u.created_at ASC
 	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.DisplayName, &u.Email, &u.Bot, &u.CreatedAt, &u.UpdatedAt, &u.PlatformStatus, &u.SlackID); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// usersStatusCTE computes the most-active platform_status for every non-bot user.
+// It is shared by CountUsersPage and ListUsersPage so the status filter can match
+// against the same computed value that the SELECT returns.
+const usersStatusCTE = `
+WITH user_status AS (
+    SELECT u.id,
+           COALESCE(
+               (SELECT ui.platform_status
+                FROM user_identities ui
+                WHERE ui.user_id = u.id
+                ORDER BY CASE ui.platform_status
+                    WHEN 'active'      THEN 4
+                    WHEN 'invited'     THEN 3
+                    WHEN 'deactivated' THEN 2
+                    ELSE 1
+                END DESC
+                LIMIT 1),
+               'unknown'
+           ) AS platform_status
+    FROM users u
+    WHERE NOT u.bot
+)`
+
+// usersPageFilter builds the WHERE clause and its positional args for the users
+// page query. The CTE already restricts to non-bot users, so only status and
+// search filters are emitted here. startIdx is the 1-based parameter number the
+// first filter arg should occupy.
+func usersPageFilter(status, search string, startIdx int) (string, []any) {
+	var clauses []string
+	var args []any
+	idx := startIdx
+	if status != "" {
+		clauses = append(clauses, fmt.Sprintf("us.platform_status = $%d", idx))
+		args = append(args, status)
+		idx++
+	}
+	if search != "" {
+		clauses = append(clauses, fmt.Sprintf("(u.display_name ILIKE '%%' || $%d || '%%' OR u.email ILIKE '%%' || $%d || '%%')", idx, idx))
+		args = append(args, search)
+		idx++
+	}
+	if len(clauses) == 0 {
+		return "", nil
+	}
+	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+// CountUsersPage returns the total number of non-bot users matching the given
+// status and search filters (ignoring pagination). Pass empty strings to skip a filter.
+func CountUsersPage(ctx context.Context, pool *pgxpool.Pool, status, search string) (int, error) {
+	where, args := usersPageFilter(status, search, 1)
+	var count int
+	err := pool.QueryRow(ctx, usersStatusCTE+`
+		SELECT COUNT(*)
+		FROM users u
+		JOIN user_status us ON us.id = u.id`+where, args...).Scan(&count)
+	return count, err
+}
+
+// ListUsersPage returns a page of non-bot users ordered alphabetically by
+// display_name, filtered by an optional status and an optional search query
+// (matched case-insensitively against display_name or email). PlatformStatus is
+// set to the most active status across all identities (active > invited >
+// deactivated > unknown).
+func ListUsersPage(ctx context.Context, pool *pgxpool.Pool, status, search string, limit, offset int) ([]User, error) {
+	where, args := usersPageFilter(status, search, 1)
+	args = append(args, limit, offset)
+	limitIdx := strconv.Itoa(len(args) - 1)
+	offsetIdx := strconv.Itoa(len(args))
+
+	rows, err := pool.Query(ctx, usersStatusCTE+`
+		SELECT u.id, u.display_name, u.email, u.bot, u.created_at, u.updated_at,
+		       us.platform_status,
+		       COALESCE(
+		           (SELECT external_id FROM user_identities
+		            WHERE user_id = u.id AND provider = 'slack' LIMIT 1),
+		           ''
+		       ) AS slack_id
+		FROM users u
+		JOIN user_status us ON us.id = u.id`+where+`
+		ORDER BY u.display_name ASC
+		LIMIT $`+limitIdx+` OFFSET $`+offsetIdx, args...)
 	if err != nil {
 		return nil, err
 	}
