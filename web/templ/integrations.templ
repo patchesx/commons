@@ -373,87 +373,35 @@ templ AddPluginModalContent(available []store.Integration) {
 			<h2 id="integrations-modal-title" class="title is-5 mb-0">Add Plugin</h2>
 			<button type="button" onclick="document.getElementById('integrations-modal').close()" class="delete" aria-label="Close"></button>
 		</div>
-		<div x-data="{ selectedID: '' }">
+		<div x-data="{ selectedType: '' }">
 			<div class="field">
 				<label class="label">Plugin</label>
 				<div class="control">
 					<div class="select is-fullwidth">
-						<select
-							name="integration_id"
-							x-model="selectedID"
-							hx-get="/admin/fragments/integrations/config-fields"
-							hx-include="[name='integration_id']"
-							hx-target="#plugin-config-fields"
-							hx-trigger="change"
-						>
+						<select x-model="selectedType">
 							<option value="">— Select a plugin —</option>
 							for _, integ := range available {
-								<option value={ integ.ID }>{ integ.Name }</option>
+								<option value={ integ.Type }>{ integ.Name }</option>
 							}
 						</select>
 					</div>
 				</div>
 			</div>
-			<div id="plugin-config-fields"></div>
+			<div class="field is-grouped is-grouped-right">
+				<div class="control">
+					<button type="button" x-on:click="document.getElementById('integrations-modal').close()" class="button">Cancel</button>
+				</div>
+				<div class="control">
+					<button
+						type="button"
+						x-on:click="if(selectedType) window.location.href='/admin/integrations/'+selectedType"
+						:disabled="!selectedType"
+						class="button is-primary"
+					>Add Plugin</button>
+				</div>
+			</div>
 		</div>
 	</div>
-}
-
-// AddPluginConfigFields renders the config form fields for a selected plugin.
-templ AddPluginConfigFields(integ store.Integration, entries []ConfigEntryView) {
-	<form
-		hx-post="/admin/fragments/integrations/add"
-		hx-on:htmx:after-request="if(event.detail.successful){ window.location.href='/admin/integrations' }"
-	>
-		<input type="hidden" name="integration_id" value={ integ.ID }/>
-		<input type="hidden" name="integration_type" value={ integ.Type }/>
-		if len(entries) == 0 {
-			<p class="is-size-7 has-text-grey mb-4">No configuration required for this plugin.</p>
-		} else {
-			<div class="mb-5">
-				for _, e := range entries {
-					<div class="field">
-						<label class="label is-small">
-							{ e.Label }
-							if e.Required {
-								<span class="has-text-danger ml-1">*</span>
-							}
-						</label>
-						if e.Description != "" {
-							<p class="help mb-1">{ e.Description }</p>
-						}
-						<div class="control">
-							<input
-								type={ addPluginInputType(e) }
-								name={ "cfg_" + e.Key }
-								placeholder="Enter value…"
-								class="input is-small is-family-monospace"
-							/>
-						</div>
-					</div>
-				}
-			</div>
-		}
-		<div class="field is-grouped is-grouped-right">
-			<div class="control">
-				<button
-					type="button"
-					x-on:click="document.getElementById('integrations-modal').close()"
-					class="button"
-				>Cancel</button>
-			</div>
-			<div class="control">
-				<button type="submit" class="button is-primary">Add Plugin</button>
-			</div>
-		</div>
-	</form>
-}
-
-func addPluginInputType(e ConfigEntryView) string {
-	if e.Sensitive {
-		return "password"
-	}
-	return "text"
 }
 
 // timezoneList returns IANA timezone names for the datalist.

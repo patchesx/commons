@@ -2,14 +2,12 @@ package adminui
 
 import (
 	"context"
-	"log"
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"commons/plugin"
 	"commons/store"
-	"commons/web"
 	admintempl "commons/web/templ"
 )
 
@@ -74,86 +72,6 @@ func (d Deps) IntegrationsAddModal() http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "text/html")
 		admintempl.AddPluginModalContent(available).Render(r.Context(), w)
-	}
-}
-
-func (d Deps) IntegrationsConfigFields() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		integID := r.URL.Query().Get("integration_id")
-		if integID == "" {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		integrations, err := store.ListIntegrations(r.Context(), d.Pool)
-		if err != nil {
-			FragmentError(w, r, "failed to load integrations")
-			return
-		}
-		var found *store.Integration
-		for i := range integrations {
-			if integrations[i].ID == integID {
-				found = &integrations[i]
-				break
-			}
-		}
-		if found == nil {
-			FragmentError(w, r, "integration not found")
-			return
-		}
-		entries, err := buildConfigEntries(r.Context(), d.Pool, found.Type, d.EncKey, false)
-		if err != nil {
-			FragmentError(w, r, "failed to load config schema")
-			return
-		}
-		w.Header().Set("Content-Type", "text/html")
-		admintempl.AddPluginConfigFields(*found, entries).Render(r.Context(), w)
-	}
-}
-
-func (d Deps) IntegrationsAdd() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			FragmentError(w, r, "invalid form data")
-			return
-		}
-		integID := r.FormValue("integration_id")
-		integType := r.FormValue("integration_type")
-		if integID == "" || integType == "" {
-			FragmentError(w, r, "missing integration_id or integration_type")
-			return
-		}
-		schema, err := store.ListConfigSchema(r.Context(), d.Pool, integType)
-		if err != nil {
-			FragmentError(w, r, "failed to load config schema")
-			return
-		}
-		sensitiveByKey := make(map[string]bool, len(schema))
-		for _, s := range schema {
-			sensitiveByKey[s.Key] = s.Sensitive
-		}
-		adminID := web.UserIDFromContext(r.Context())
-		var adminIDPtr *string
-		if adminID != "" {
-			adminIDPtr = &adminID
-		}
-		for _, s := range schema {
-			val := r.FormValue("cfg_" + s.Key)
-			if val == "" {
-				continue
-			}
-			if err := store.SetServiceConfig(r.Context(), d.Pool, integType, s.Key, val, s.Sensitive, adminIDPtr, d.EncKey); err != nil {
-				log.Printf("adminui/integrations: add:failed to save config key %q for service %q: %v", s.Key, integType, err)
-				FragmentError(w, r, "failed to save config")
-				return
-			}
-		}
-		if err := store.SetIntegrationEnabled(r.Context(), d.Pool, integID, true); err != nil {
-			log.Printf("adminui/integrations: add:failed to enable integration %q: %v", integID, err)
-			FragmentError(w, r, "failed to enable integration")
-			return
-		}
-		w.Header().Set("HX-Redirect", "/admin/integrations")
-		w.WriteHeader(http.StatusOK)
 	}
 }
 
@@ -328,7 +246,7 @@ func buildIntegrationListData(ctx context.Context, pool *pgxpool.Pool, encKey []
 					hasConfig = true
 				}
 			}
-			if integ.Enabled || hasConfig {
+			if hasConfig {
 				items = append(items, admintempl.IntegrationListItemData{
 					Integration: store.Integration{
 						ID:      integ.ID,
@@ -362,7 +280,7 @@ func buildIntegrationListData(ctx context.Context, pool *pgxpool.Pool, encKey []
 				hasConfig = true
 			}
 		}
-		if integ.Enabled || hasConfig {
+		if hasConfig {
 			items = append(items, admintempl.IntegrationListItemData{
 				Integration: integ,
 				HasMissing:  hasMissing,

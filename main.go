@@ -236,8 +236,6 @@ func main() {
 	mux.Handle("GET /admin/integrations", webAuth(admin.IntegrationsPage()))
 	mux.Handle("GET /admin/integrations/{slug}", webAuth(admin.IntegrationDetail()))
 	mux.Handle("GET /admin/fragments/integrations/add-modal", webAuth(admin.IntegrationsAddModal()))
-	mux.Handle("GET /admin/fragments/integrations/config-fields", webAuth(admin.IntegrationsConfigFields()))
-	mux.Handle("POST /admin/fragments/integrations/add", webAuth(admin.IntegrationsAdd()))
 	mux.Handle("GET /admin/fragments/config/{service}", webAuth(admin.ConfigFragment()))
 
 	// Settings.
