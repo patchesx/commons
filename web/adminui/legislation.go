@@ -285,7 +285,7 @@ func (d Deps) MatterTypes() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		body, err := store.GetLegislativeBody(ctx, d.Pool, r.PathValue("id"))
-		inputClass := "w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-0.5 text-xs bg-white dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-1 focus:ring-accent-500"
+		inputClass := "input is-small is-fullwidth"
 		selectClass := inputClass
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err != nil || body == nil || body.LegistarClient == nil {

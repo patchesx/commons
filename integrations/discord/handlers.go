@@ -120,23 +120,24 @@ func registerSlashCommand(ctx context.Context, appID, guildID, token, cmdName st
 func renderCommandCard(cmdName, msg string, success bool) string {
 	var statusHTML string
 	if msg != "" {
-		color := "red"
+		colorClass := "has-text-danger"
 		if success {
-			color = "green"
+			colorClass = "has-text-success"
 		}
 		statusHTML = fmt.Sprintf(
-			`<p id="discord-cmd-result" class="mt-2 text-sm text-`+color+`-600 dark:text-`+color+`-400">%s</p>`,
+			`<p id="discord-cmd-result" class="mt-2 is-size-6 %s">%s</p>`,
+			colorClass,
 			html.EscapeString(msg),
 		)
 	}
 
-	return `<div class="bg-white dark:bg-gray-800 rounded-lg shadow">
-  <div class="px-4 py-3 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
-    <h2 class="text-base font-semibold text-gray-800 dark:text-white">Discord — Slash Command</h2>
+	return `<div class="box">
+  <div class="is-flex is-justify-content-space-between is-align-items-center mb-4">
+    <h2 class="title is-6 mb-0">Discord — Slash Command</h2>
   </div>
-  <div class="px-4 py-4 space-y-3">
-    <p class="text-sm text-gray-600 dark:text-gray-400">
-      Register the <code class="font-mono text-xs bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded">/` + html.EscapeString(cmdName) + `</code>
+  <div>
+    <p class="is-size-7 has-text-grey mb-3">
+      Register the <code class="is-family-monospace is-size-7 has-background-light" style="padding: 0.125rem 0.25rem; border-radius: 0.25rem">/` + html.EscapeString(cmdName) + `</code>
       slash command with your Discord server. You must have the bot token, application ID, guild ID,
       and command name saved above before registering.
     </p>
@@ -144,22 +145,17 @@ func renderCommandCard(cmdName, msg string, success bool) string {
       <button
         hx-post="/api/discord/register-command"
         hx-swap="outerHTML"
-        hx-target="closest div.bg-white, closest div.bg-gray-800"
+        hx-target="closest div.box"
         hx-indicator="#discord-cmd-spinner"
-        class="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded bg-accent-600 text-white hover:bg-accent-700 transition-colors"
+        class="button is-primary is-small"
       >
-        <span id="discord-cmd-spinner" class="htmx-indicator">
-          <svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
-          </svg>
-        </span>
+        <span id="discord-cmd-spinner" class="htmx-indicator is-size-7">Loading… </span>
         Register /` + html.EscapeString(cmdName) + `
       </button>` + statusHTML + `
     </div>
-    <p class="text-xs text-gray-400 dark:text-gray-500">
+    <p class="is-size-7 has-text-grey-light mt-3">
       Re-registering is safe — Discord will overwrite the existing command.
-      After registering, members can type <code class="font-mono bg-gray-100 dark:bg-gray-700 px-0.5 rounded">/` + html.EscapeString(cmdName) + `</code> in your server.
+      After registering, members can type <code class="is-family-monospace is-size-7 has-background-light" style="padding: 0 0.125rem; border-radius: 0.25rem">/` + html.EscapeString(cmdName) + `</code> in your server.
     </p>
   </div>
 </div>`

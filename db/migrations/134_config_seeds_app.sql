@@ -5,6 +5,6 @@
 
 INSERT INTO config_schema (service, key, label, description, sensitive, required) VALUES
     ('app', 'base_url', 'Base URL',
-     'Public URL where this instance is reachable (e.g. https://commons.example.org). Used to build webhook URLs for integrations like Slack.',
+     'Public URL of this instance, e.g. https://commons.example.org',
      FALSE, TRUE)
 ON CONFLICT DO NOTHING;

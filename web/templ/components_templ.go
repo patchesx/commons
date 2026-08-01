@@ -731,7 +731,7 @@ func textConfigRow(service string, e ConfigEntryView, revealed bool) templ.Compo
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "\"><div class=\"columns mb-0 is-align-items-center\" style=\"margin: 0\"><div class=\"column is-narrow py-4\" style=\"min-width: 13rem; overflow-wrap: break-word; word-break: break-word\"><div class=\"has-text-weight-semibold is-size-7\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "\"><div class=\"columns mb-0 is-align-items-center\" style=\"margin: 0\"><div class=\"column is-narrow py-4\" style=\"min-width: 13rem; max-width: 13rem; overflow-wrap: break-word; word-break: break-word\"><div class=\"has-text-weight-semibold is-size-7\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

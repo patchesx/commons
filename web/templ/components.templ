@@ -192,7 +192,7 @@ templ ToggleButton(pressedExpr, onClickExpr, ariaLabel string) {
 templ textConfigRow(service string, e ConfigEntryView, revealed bool) {
 	<div style="border-bottom: 1px solid var(--bulma-border)" x-data={ credRowData(e) }>
 		<div class="columns mb-0 is-align-items-center" style="margin: 0">
-			<div class="column is-narrow py-4" style="min-width: 13rem; overflow-wrap: break-word; word-break: break-word">
+			<div class="column is-narrow py-4" style="min-width: 13rem; max-width: 13rem; overflow-wrap: break-word; word-break: break-word">
 				<div class="has-text-weight-semibold is-size-7">{ e.Label }</div>
 				<div class="is-family-monospace is-size-7 has-text-grey">{ e.Key }</div>
 				if e.Description != "" {
