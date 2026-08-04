@@ -113,10 +113,16 @@ func UpdateRequestNotificationDMs(ctx context.Context, pool *pgxpool.Pool, clien
 		log.Printf("slack: list notifications for request %s: %v", requestID, err)
 		return
 	}
+	req, err := store.GetChannelRequest(ctx, pool, requestID)
+	if err != nil || req == nil {
+		log.Printf("slack: update DM notifications: request %s not found: %v", requestID, err)
+		return
+	}
+	displays := buildRequestDisplays(ctx, pool, []store.ChannelRequest{*req})
+	resolvedBlocks := blocks.ResolvedRequestBlocks(displays[0], resolvedText)
 	for _, n := range notifications {
 		if _, _, _, err := client.UpdateMessageContext(ctx, n.DMChannelID, n.MessageTS,
-			slacklib.MsgOptionText(resolvedText, false),
-			slacklib.MsgOptionBlocks(),
+			slacklib.MsgOptionBlocks(resolvedBlocks...),
 		); err != nil {
 			log.Printf("slack: update DM notification %s: %v", n.ID, err)
 		}

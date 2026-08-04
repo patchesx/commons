@@ -16,6 +16,7 @@ import (
 	slacklib "github.com/slack-go/slack"
 
 	"commons/integrations/librarything"
+	"commons/integrations/slack/blocks"
 	"commons/permissions"
 	"commons/platform"
 	"commons/store"
@@ -1088,10 +1089,10 @@ func handleApproveRequest(ctx context.Context, pool *pgxpool.Pool, encKey []byte
 			log.Printf("slack/interactions: update pending requests modal after approve: %v", err)
 		}
 	} else if payload.Channel.ID != "" && payload.Message.Timestamp != "" {
-		// Directly update the clicked message — reliable even for requests that predate notification tracking.
+		// Directly update the clicked message — keep the request details, replace only the buttons.
+		displays := buildRequestDisplays(ctx, pool, []store.ChannelRequest{*req})
 		if _, _, _, err := client.UpdateMessageContext(ctx, payload.Channel.ID, payload.Message.Timestamp,
-			slacklib.MsgOptionText(resolved, false),
-			slacklib.MsgOptionBlocks(),
+			slacklib.MsgOptionBlocks(blocks.ResolvedRequestBlocks(displays[0], resolved)...),
 		); err != nil {
 			log.Printf("slack/interactions: update DM after approve: %v", err)
 		}
@@ -1148,10 +1149,10 @@ func handleDeclineRequest(ctx context.Context, pool *pgxpool.Pool, encKey []byte
 			log.Printf("slack/interactions: update pending requests modal after decline: %v", err)
 		}
 	} else if payload.Channel.ID != "" && payload.Message.Timestamp != "" {
-		// Directly update the clicked message — reliable even for requests that predate notification tracking.
+		// Directly update the clicked message — keep the request details, replace only the buttons.
+		displays := buildRequestDisplays(ctx, pool, []store.ChannelRequest{*req})
 		if _, _, _, err := client.UpdateMessageContext(ctx, payload.Channel.ID, payload.Message.Timestamp,
-			slacklib.MsgOptionText(resolved, false),
-			slacklib.MsgOptionBlocks(),
+			slacklib.MsgOptionBlocks(blocks.ResolvedRequestBlocks(displays[0], resolved)...),
 		); err != nil {
 			log.Printf("slack/interactions: update DM after decline: %v", err)
 		}

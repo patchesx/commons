@@ -139,11 +139,19 @@ features:
 oauth_config:
   scopes:
     bot:
+      - channels:history
+      - channels:join
+      - channels:manage
       - channels:read
       - chat:write
+      - emoji:read
+      - groups:history
       - groups:read
+      - groups:write
+      - groups:write.invites
       - im:history
       - im:write
+      - reactions:read
       - users:read
       - users:read.email
 settings:

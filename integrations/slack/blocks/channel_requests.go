@@ -59,6 +59,23 @@ func PendingRequestsBlocks(requests []ChannelRequestDisplay) []slacklib.Block {
 	return blks
 }
 
+// ResolvedRequestBlocks returns Block Kit blocks for a channel access request after it has
+// been approved or declined. It preserves the original request section (requester + channel)
+// and replaces the approve/decline buttons with the resolution status.
+func ResolvedRequestBlocks(req ChannelRequestDisplay, resolvedText string) []slacklib.Block {
+	elapsed := time.Since(req.RequestedAt).Round(time.Minute)
+	text := fmt.Sprintf("*%s* wants to join *#%s*\n_%s ago_",
+		req.RequesterName, req.SlackChannelName, formatDuration(elapsed))
+
+	return []slacklib.Block{
+		slacklib.NewSectionBlock(
+			slacklib.NewTextBlockObject(slacklib.MarkdownType, text, false, false),
+			nil, nil,
+		),
+		slacklib.NewContextBlock("", slacklib.NewTextBlockObject(slacklib.MarkdownType, resolvedText, false, false)),
+	}
+}
+
 func formatDuration(d time.Duration) string {
 	if d < time.Minute {
 		return "just now"
