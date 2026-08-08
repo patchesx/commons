@@ -295,6 +295,7 @@ func main() {
 
 	// LegislationPage — full page, bills table fragment, bill/body form modals, filters, tags, sync.
 	mux.Handle("GET /admin/legislation", webAuth(admin.LegislationPage()))
+	mux.Handle("GET /admin/legislation/browse/{id}", webAuth(admin.BrowseBillsPage()))
 	mux.Handle("GET /admin/fragments/legislation-bills", webAuth(admin.LegislationBillsTable()))
 	mux.Handle("GET /admin/fragments/legislation/add-bill-form", webAuth(admin.AddBillForm()))
 	mux.Handle("POST /admin/fragments/legislation/bills", webAuth(admin.BillsCreate()))
@@ -307,6 +308,9 @@ func main() {
 	mux.Handle("POST /admin/fragments/legislation/bodies/{id}/filters", webAuth(admin.FiltersCreate()))
 	mux.Handle("DELETE /admin/fragments/legislation/filters/{id}", webAuth(admin.FiltersDelete()))
 	mux.Handle("GET /admin/fragments/legislation/bodies/{id}/matter-types", webAuth(admin.MatterTypes()))
+	mux.Handle("POST /admin/fragments/legislation/bodies/{id}/subjects/refresh", webAuth(admin.RefreshBodySubjects()))
+	mux.Handle("GET /admin/fragments/legislation/bodies/{id}/browse", webAuth(admin.BrowseBills()))
+	mux.Handle("POST /admin/fragments/legislation/bodies/{id}/track", webAuth(admin.TrackBillFromBrowse()))
 	mux.Handle("POST /admin/fragments/legislation/sync", webAuth(admin.LegislationSync()))
 	mux.Handle("POST /admin/fragments/legislation/tags", webAuth(admin.TagsCreate()))
 	mux.Handle("DELETE /admin/fragments/legislation/tags/{id}", webAuth(admin.TagsDelete()))

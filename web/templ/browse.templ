@@ -1,0 +1,223 @@
+package admintempl
+
+import (
+	"encoding/json"
+	"net/url"
+	"strconv"
+
+	"commons/legislation"
+	"commons/store"
+)
+
+func trackBillVals(bill legislation.BrowseBillResult) string {
+	vals := map[string]string{
+		"external_id": bill.ExternalID,
+		"identifier":  bill.Identifier,
+		"title":       bill.Title,
+	}
+	if bill.Session != "" {
+		vals["session"] = bill.Session
+	}
+	if bill.Chamber != "" {
+		vals["chamber"] = bill.Chamber
+	}
+	if bill.Link != "" {
+		vals["link"] = bill.Link
+	}
+	b, _ := json.Marshal(vals)
+	return string(b)
+}
+
+func browseURL(bodyID string, params legislation.BrowseParams, page int) string {
+	v := url.Values{}
+	v.Set("page", strconv.Itoa(page))
+	if params.Query != "" {
+		v.Set("q", params.Query)
+	}
+	if params.Session != "" {
+		v.Set("session", params.Session)
+	}
+	if params.Chamber != "" {
+		v.Set("chamber", params.Chamber)
+	}
+	if params.Subject != "" {
+		v.Set("subject", params.Subject)
+	}
+	if params.Sort != "" {
+		v.Set("sort", params.Sort)
+	}
+	return "/admin/legislation/browse/" + bodyID + "?" + v.Encode()
+}
+
+templ BrowseBillsPage(body *store.LegislativeBody, result legislation.BrowseResult, params legislation.BrowseParams, subjects []string, errMsg string) {
+	@Layout("Browse bills", "/admin/legislation/browse/"+body.ID) {
+		<div class="mb-4">
+			<a href="/admin/legislation" class="is-size-7">← Back to Legislation</a>
+			<h1 class="title is-4 mb-1">Browse bills — { body.Name }</h1>
+			<p class="is-size-7 has-text-grey">{ bodyLevelLabel(body.Level) } · { body.State } · { body.DataSource }</p>
+		</div>
+		@BrowseBillsFilters(body, params, subjects)
+		<div id="bill-list">
+			@BrowseBillsList(body.ID, body.DataSource, result, params, errMsg)
+		</div>
+	}
+}
+
+templ BrowseBillsFilters(body *store.LegislativeBody, params legislation.BrowseParams, subjects []string) {
+	<form
+		class="mb-4"
+		hx-get={ "/admin/legislation/browse/" + body.ID }
+		hx-target="#bill-list"
+		hx-swap="innerHTML"
+		hx-trigger="submit"
+		hx-push-url="true"
+	>
+		<div class="field is-grouped" style="gap: 0.5rem; flex-wrap: wrap">
+			if body.DataSource == "openstates" {
+				<div class="control is-expanded">
+					<input
+						type="text"
+						name="q"
+						value={ params.Query }
+						placeholder="Search bills…"
+						class="input is-small"
+					/>
+				</div>
+				<div class="control">
+					<input
+						type="text"
+						name="session"
+						value={ params.Session }
+						placeholder="Session"
+						class="input is-small"
+						style="max-width: 6rem"
+					/>
+				</div>
+				<div class="control">
+					<div class="select is-small">
+						<select name="chamber">
+							<option value="" selected?={ params.Chamber == "" }>All chambers</option>
+							<option value="lower" selected?={ params.Chamber == "lower" }>Lower</option>
+							<option value="upper" selected?={ params.Chamber == "upper" }>Upper</option>
+						</select>
+					</div>
+				</div>
+				if len(subjects) > 0 {
+					<div class="control">
+						<div class="select is-small">
+							<select name="subject">
+								<option value="" selected?={ params.Subject == "" }>All subjects</option>
+								for _, s := range subjects {
+									<option value={ s } selected?={ params.Subject == s }>{ s }</option>
+								}
+							</select>
+						</div>
+					</div>
+				}
+				<div class="control">
+					<div class="select is-small">
+						<select name="sort">
+							<option value="" selected?={ params.Sort == "" }>Recently updated</option>
+							<option value="first_action_desc" selected?={ params.Sort == "first_action_desc" }>Latest action</option>
+							<option value="updated_asc" selected?={ params.Sort == "updated_asc" }>Oldest updates</option>
+						</select>
+					</div>
+				</div>
+			}
+			<div class="control">
+				<button type="submit" class="button is-primary is-small">Apply</button>
+			</div>
+		</div>
+	</form>
+}
+
+templ BrowseBillsList(bodyID string, dataSource string, result legislation.BrowseResult, params legislation.BrowseParams, errMsg string) {
+	if errMsg != "" {
+		<div class="notification is-danger is-light">
+			<p class="is-size-7">Failed to fetch bills: { errMsg }</p>
+			if dataSource == "openstates" {
+				<p class="is-size-7 has-text-grey mt-1">If this is an OpenStates rate limit, wait a moment and try again.</p>
+			}
+		</div>
+	} else if len(result.Bills) == 0 {
+		<div class="notification is-light">
+			<p class="is-size-7 has-text-grey">No bills found. Try adjusting filters or widening your search.</p>
+		</div>
+	} else {
+		for _, bill := range result.Bills {
+			@BrowseBillRow(bodyID, bill)
+		}
+		@BrowseBillsPagination(bodyID, result, params)
+	}
+}
+
+templ BrowseBillRow(bodyID string, bill legislation.BrowseBillResult) {
+	<div class="is-flex is-justify-content-space-between is-align-items-start py-2" style="border-bottom: 1px solid #dbdbdb">
+		<div style="min-width: 0; flex: 1; margin-right: 0.75rem">
+			<div class="is-size-7">
+				<span class="has-text-weight-semibold">{ bill.Identifier }</span>
+				if bill.Session != "" {
+					<span class="has-text-grey ml-2">{ bill.Session }</span>
+				}
+				if bill.MatterType != "" {
+					<span class="tag is-rounded ml-2">{ bill.MatterType }</span>
+				}
+			</div>
+			<div class="is-size-7" style="word-break: break-word">{ bill.Title }</div>
+			if bill.LatestAction != "" {
+				<div class="is-size-7 has-text-grey">
+					{ bill.LatestAction }
+				</div>
+			}
+			if bill.Link != "" {
+				<div class="is-size-7">
+					<a href={ bill.Link } target="_blank" class="has-text-link">View source →</a>
+				</div>
+			}
+		</div>
+		<div class="is-flex-shrink-0">
+			if bill.Tracked {
+				<button
+					type="button"
+					class="button is-small is-success"
+					hx-delete={ "/admin/fragments/legislation/bills/" + bill.BillID }
+					hx-swap="outerHTML"
+					hx-target="closest div.is-flex.is-justify-content-space-between"
+				>Tracked ✓</button>
+			} else {
+				<button
+					type="button"
+					class="button is-small is-outlined is-link"
+					hx-post={ "/admin/fragments/legislation/bodies/" + bodyID + "/track" }
+					hx-vals={ trackBillVals(bill) }
+					hx-swap="outerHTML"
+					hx-target="closest div.is-flex.is-justify-content-space-between"
+				>Track</button>
+			}
+		</div>
+	</div>
+}
+
+templ BrowseBillsPagination(bodyID string, result legislation.BrowseResult, params legislation.BrowseParams) {
+	<nav class="pagination is-small is-centered mt-4" role="navigation">
+		<div class="is-size-7 has-text-grey mb-2">Page { strconv.Itoa(result.Page) } of { strconv.Itoa(result.MaxPage) }</div>
+		<div class="pagination-list">
+			if result.Page > 1 {
+				<a
+					class="pagination-link"
+					hx-get={ browseURL(bodyID, params, result.Page-1) }
+					hx-target="#bill-list"
+					hx-swap="innerHTML"
+				>← Prev</a>
+			}
+			if result.Page < result.MaxPage {
+				<a
+					class="pagination-link"
+					hx-get={ browseURL(bodyID, params, result.Page+1) }
+					hx-target="#bill-list"
+					hx-swap="innerHTML"
+				>Next →</a>
+			}
+		</div>
+	</nav>
+}

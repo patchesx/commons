@@ -158,6 +158,31 @@ func GetLegislativeBody(ctx context.Context, pool *pgxpool.Pool, id string) (*Le
 	return &bodies[0], nil
 }
 
+// GetLegislativeBodyByClient returns the legistar body for a given client subdomain.
+// Returns ErrNotFound if no legistar body with that client exists.
+func GetLegislativeBodyByClient(ctx context.Context, pool *pgxpool.Pool, client string) (*LegislativeBody, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT id, name, level, state, data_source,
+		       openstates_jurisdiction, openstates_chamber,
+		       legistar_client, legistar_body_id,
+		       active, created_at
+		FROM legislative_bodies
+		WHERE data_source = 'legistar' AND legistar_client = $1
+	`, client)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	bodies, err := scanBodies(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(bodies) == 0 {
+		return nil, ErrNotFound
+	}
+	return &bodies[0], nil
+}
+
 // ListActiveBodiesBySource returns active bodies filtered by data_source.
 // Used by the sync engine to load bodies for a specific provider.
 func ListActiveBodiesBySource(ctx context.Context, pool *pgxpool.Pool, dataSource string) ([]LegislativeBody, error) {
@@ -650,4 +675,63 @@ func HasTrackedBills(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 	var exists bool
 	err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM bills WHERE following = TRUE LIMIT 1)`).Scan(&exists)
 	return exists, err
+}
+
+// UpsertBodySubjects refreshes the cached subject list for a body.
+// Inserts new subjects and updates last_seen_at for existing ones.
+func UpsertBodySubjects(ctx context.Context, pool *pgxpool.Pool, bodyID string, subjects []string) error {
+	if len(subjects) == 0 {
+		return nil
+	}
+	_, err := pool.Exec(ctx, `
+		INSERT INTO legislative_body_subjects (body_id, subject, last_seen_at)
+		SELECT $1, unnest($2::text[]), NOW()
+		ON CONFLICT (body_id, subject)
+		DO UPDATE SET last_seen_at = NOW()
+	`, bodyID, subjects)
+	return err
+}
+
+// ListCachedBodySubjects returns cached subjects for a body, ordered alphabetically.
+func ListCachedBodySubjects(ctx context.Context, pool *pgxpool.Pool, bodyID string) ([]string, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT subject FROM legislative_body_subjects
+		WHERE body_id = $1
+		ORDER BY subject
+	`, bodyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var subjects []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		subjects = append(subjects, s)
+	}
+	return subjects, rows.Err()
+}
+
+// TrackedExternalIDs returns a map of external_id → bill_id for all followed bills
+// belonging to the given body. Used by BrowseBills to set the Tracked flag and BillID.
+func TrackedExternalIDs(ctx context.Context, pool *pgxpool.Pool, bodyID string) (map[string]string, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT external_id, id FROM bills
+		WHERE body_id = $1 AND following = TRUE AND external_id IS NOT NULL
+	`, bodyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[string]string)
+	for rows.Next() {
+		var extID, billID string
+		if err := rows.Scan(&extID, &billID); err != nil {
+			return nil, err
+		}
+		m[extID] = billID
+	}
+	return m, rows.Err()
 }

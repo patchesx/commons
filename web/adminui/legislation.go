@@ -3,9 +3,12 @@ package adminui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"commons/legislation"
@@ -200,8 +203,12 @@ func (d Deps) BodiesCreate() http.HandlerFunc {
 			DataSource: r.FormValue("data_source"),
 			Active:     true,
 		}
+		if errMsg := setSourceFields(b, r); errMsg != "" {
+			admintempl.BodyFormModal(b, errMsg).Render(ctx, w)
+			return
+		}
 		if err := store.CreateLegislativeBody(ctx, d.Pool, b); err != nil {
-			admintempl.BodyFormModal(nil, "Failed to create body.").Render(ctx, w)
+			admintempl.BodyFormModal(b, "Failed to create body.").Render(ctx, w)
 			return
 		}
 		w.Header().Set("HX-Redirect", "/admin/legislation")
@@ -237,6 +244,10 @@ func (d Deps) BodiesUpdate() http.HandlerFunc {
 			DataSource: r.FormValue("data_source"),
 			Active:     r.FormValue("active") == "true",
 		}
+		if errMsg := setSourceFields(b, r); errMsg != "" {
+			admintempl.BodyFormModal(b, errMsg).Render(ctx, w)
+			return
+		}
 		if err := store.UpdateLegislativeBody(ctx, d.Pool, b); err != nil {
 			admintempl.BodyFormModal(b, "Failed to update body.").Render(ctx, w)
 			return
@@ -246,6 +257,35 @@ func (d Deps) BodiesUpdate() http.HandlerFunc {
 	}
 }
 
+// setSourceFields populates the source-specific fields on a LegislativeBody from
+// form values based on the body's DataSource. Returns a non-empty error message
+// if a required field is missing.
+func setSourceFields(b *store.LegislativeBody, r *http.Request) string {
+	switch b.DataSource {
+	case "openstates":
+		if j := r.FormValue("openstates_jurisdiction"); j != "" {
+			b.OpenStatesJurisdiction = &j
+		} else {
+			return "OpenStates jurisdiction ID is required."
+		}
+		if c := r.FormValue("openstates_chamber"); c != "" {
+			b.OpenStatesChamber = &c
+		}
+	case "legistar":
+		if c := r.FormValue("legistar_client"); c != "" {
+			b.LegistarClient = &c
+		} else {
+			return "Legistar client subdomain is required."
+		}
+		if idStr := r.FormValue("legistar_body_id"); idStr != "" {
+			if id, err := strconv.Atoi(idStr); err == nil {
+				b.LegistarBodyID = &id
+			}
+		}
+	}
+	return ""
+}
+
 func (d Deps) FiltersCreate() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -253,19 +293,26 @@ func (d Deps) FiltersCreate() http.HandlerFunc {
 			FragmentError(w, r, "bad request")
 			return
 		}
-		value := r.FormValue("value")
-		if value == "" {
+		values := r.Form["value"]
+		if len(values) == 0 {
 			FragmentError(w, r, "value required")
 			return
 		}
-		f := &store.ImportFilter{
-			BodyID:     r.PathValue("id"),
-			FilterType: r.FormValue("filter_type"),
-			Value:      value,
-		}
-		if err := store.CreateImportFilter(ctx, d.Pool, f); err != nil {
-			FragmentError(w, r, "failed to create filter")
-			return
+		filterType := r.FormValue("filter_type")
+		bodyID := r.PathValue("id")
+		for _, value := range values {
+			if value == "" {
+				continue
+			}
+			f := &store.ImportFilter{
+				BodyID:     bodyID,
+				FilterType: filterType,
+				Value:      value,
+			}
+			if err := store.CreateImportFilter(ctx, d.Pool, f); err != nil {
+				FragmentError(w, r, "failed to create filter")
+				return
+			}
 		}
 		w.WriteHeader(http.StatusOK)
 	}
@@ -327,6 +374,155 @@ func (d Deps) LegislationSync() http.HandlerFunc {
 	}
 }
 
+func (d Deps) RefreshBodySubjects() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		bodyID := r.PathValue("id")
+		body, err := store.GetLegislativeBody(ctx, d.Pool, bodyID)
+		if err != nil || body == nil {
+			http.Error(w, "body not found", http.StatusNotFound)
+			return
+		}
+		if body.DataSource != "openstates" {
+			http.Error(w, "subject cache is only available for OpenStates bodies", http.StatusBadRequest)
+			return
+		}
+		count, err := legislation.RefreshSubjects(ctx, d.Pool, d.EncKey, *body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprintf(w, "Refreshed %d subjects", count)
+	}
+}
+
+func (d Deps) BrowseBills() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		body, err := store.GetLegislativeBody(ctx, d.Pool, r.PathValue("id"))
+		if err != nil || body == nil {
+			http.Error(w, "body not found", http.StatusNotFound)
+			return
+		}
+		params := legislation.BrowseParams{PerPage: 20}
+		if p, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && p > 0 {
+			params.Page = p
+		} else {
+			params.Page = 1
+		}
+		params.Session = r.URL.Query().Get("session")
+		params.Chamber = r.URL.Query().Get("chamber")
+		params.Subject = r.URL.Query().Get("subject")
+		params.Query = r.URL.Query().Get("q")
+		params.Sort = r.URL.Query().Get("sort")
+
+		result, err := legislation.BrowseBills(ctx, d.Pool, d.EncKey, *body, params)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
+	}
+}
+
+func (d Deps) BrowseBillsPage() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		body, err := store.GetLegislativeBody(ctx, d.Pool, r.PathValue("id"))
+		if err != nil || body == nil {
+			http.Error(w, "body not found", http.StatusNotFound)
+			return
+		}
+		params := legislation.BrowseParams{PerPage: 20}
+		if p, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && p > 0 {
+			params.Page = p
+		} else {
+			params.Page = 1
+		}
+		params.Session = r.URL.Query().Get("session")
+		params.Chamber = r.URL.Query().Get("chamber")
+		params.Subject = r.URL.Query().Get("subject")
+		params.Query = r.URL.Query().Get("q")
+		params.Sort = r.URL.Query().Get("sort")
+
+		result, browseErr := legislation.BrowseBills(ctx, d.Pool, d.EncKey, *body, params)
+		var errMsg string
+		if browseErr != nil {
+			errMsg = browseErr.Error()
+		}
+
+		var subjects []string
+		if body.DataSource == "openstates" {
+			subjects, _ = store.ListCachedBodySubjects(ctx, d.Pool, body.ID)
+		}
+
+		if r.Header.Get("HX-Request") == "true" {
+			admintempl.BrowseBillsList(body.ID, body.DataSource, result, params, errMsg).Render(ctx, w)
+		} else {
+			admintempl.BrowseBillsPage(body, result, params, subjects, errMsg).Render(ctx, w)
+		}
+	}
+}
+
+func (d Deps) TrackBillFromBrowse() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		body, err := store.GetLegislativeBody(ctx, d.Pool, r.PathValue("id"))
+		if err != nil || body == nil {
+			http.Error(w, "body not found", http.StatusNotFound)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		externalID := r.FormValue("external_id")
+		identifier := r.FormValue("identifier")
+		title := r.FormValue("title")
+		if externalID == "" || identifier == "" || title == "" {
+			http.Error(w, "external_id, identifier, and title are required", http.StatusBadRequest)
+			return
+		}
+		b := &store.Bill{
+			BodyID:     body.ID,
+			ExternalID: &externalID,
+			Identifier: identifier,
+			Title:      title,
+			Following:  true,
+		}
+		if v := r.FormValue("session"); v != "" {
+			b.Session = &v
+		}
+		if v := r.FormValue("chamber"); v != "" {
+			b.Chamber = &v
+		}
+		if v := r.FormValue("link"); v != "" {
+			b.Link = &v
+		}
+
+		_, err = store.UpsertBill(ctx, d.Pool, b)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Bill was previously dismissed (following=false) — un-dismiss it.
+			existing, findErr := store.GetBillByExternalID(ctx, d.Pool, body.ID, externalID)
+			if findErr != nil {
+				http.Error(w, "failed to find dismissed bill", http.StatusInternalServerError)
+				return
+			}
+			if err := store.SetBillFollowing(ctx, d.Pool, existing.ID, true); err != nil {
+				http.Error(w, "failed to un-dismiss bill", http.StatusInternalServerError)
+				return
+			}
+		} else if err != nil {
+			http.Error(w, "failed to track bill", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
 func (d Deps) TagsCreate() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -381,7 +577,10 @@ func loadLegislationPageData(ctx context.Context, pool *pgxpool.Pool, bodyFilter
 		}
 		filtersMap[body.ID] = filters
 		if body.DataSource == "openstates" {
-			subjects, _ := store.ListBodySubjects(ctx, pool, body.ID)
+			subjects, _ := store.ListCachedBodySubjects(ctx, pool, body.ID)
+			if len(subjects) == 0 {
+				subjects, _ = store.ListBodySubjects(ctx, pool, body.ID)
+			}
 			subjectsMap[body.ID] = subjects
 		}
 	}

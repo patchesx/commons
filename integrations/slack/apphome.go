@@ -12,7 +12,6 @@ import (
 	"commons/integrations/slack/blocks"
 	"commons/permissions"
 	"commons/store"
-	"commons/util"
 )
 
 // hasPermission reports whether the permission key is in the list.
@@ -28,11 +27,11 @@ func hasPermission(perms []string, key string) bool {
 // Publish builds and publishes the role-aware App Home view for a Slack user.
 // Called in a background goroutine from the events handler.
 func Publish(ctx context.Context, pool *pgxpool.Pool, encKey []byte, client *slacklib.Client, slackUserID string) {
-	title := "Org Operations Bot"
+	title := "Commons - Slack Bot"
 	if t, err := store.GetServiceConfig(ctx, pool, "bot", "title", encKey); err == nil && t != "" {
 		title = t
 	}
-	welcomeMsg := "Access team resources, upcoming events, legislation tracking, and more."
+	welcomeMsg := "Access team calendars and view upcoming events, access private channels, and more."
 	if m, err := store.GetServiceConfig(ctx, pool, "bot", "welcome_message", encKey); err == nil && m != "" {
 		welcomeMsg = m
 	}
@@ -128,16 +127,6 @@ func Publish(ctx context.Context, pool *pgxpool.Pool, encKey []byte, client *sla
 			}
 		}
 
-		// 4. Legacy single iCal URL from config_store (deprecated path).
-		if activeCal == nil {
-			if calURL, err := store.GetServiceConfig(ctx, pool, "bot", "calendar_url", encKey); err == nil && calURL != "" {
-				calTZ := util.DefaultTimezone(ctx, pool, encKey)
-				blks = append(blks, calendarBlocksForCalendar(ctx, pool, store.Calendar{
-					ID: "_legacy", Name: "Events", Timezone: calTZ, IcalURL: &calURL,
-				}, nil)...)
-			}
-		}
-
 		if activeCal != nil {
 			// Build a calendar-switcher dropdown when there are multiple calendars.
 			// It is passed into calendarBlocksForCalendar as an accessory on the
@@ -201,26 +190,36 @@ func Publish(ctx context.Context, pool *pgxpool.Pool, encKey []byte, client *sla
 	// 		))
 	// 	}
 	// }
-	if hasPermission(perms, permissions.LegislationView) {
-		if hasTrackedBills, _ := store.HasTrackedBills(ctx, pool); hasTrackedBills {
-			actionButtons = append(actionButtons, slacklib.NewButtonBlockElement(
-				ActionOpenLegislation, "open",
-				slacklib.NewTextBlockObject(slacklib.PlainTextType, ":bookmark_tabs: Legislation", true, false),
-			))
-		}
-	}
+
 	if hasPermission(perms, permissions.ChannelsRequestAccess) {
 		actionButtons = append(actionButtons, slacklib.NewButtonBlockElement(
 			ActionRequestChannelAccess, "open",
 			slacklib.NewTextBlockObject(slacklib.PlainTextType, ":lock: Channel Request", true, false),
 		))
 	}
-	if hasPermission(perms, permissions.WorkItemsCreate) {
-		actionButtons = append(actionButtons, slacklib.NewButtonBlockElement(
-			ActionReportIssue, "open",
-			slacklib.NewTextBlockObject(slacklib.PlainTextType, ":memo: Report Issue", true, false),
-		))
+
+	if approverChannelIDs, err := store.GetUserChannelApprovals(ctx, pool, user.ID); err != nil {
+		log.Printf("slack/apphome: list channel approvals for %s: %v", user.ID, err)
+	} else if len(approverChannelIDs) > 0 {
+		pending, _ := store.ListPendingRequestsForChannels(ctx, pool, approverChannelIDs)
+		if len(pending) > 0 {
+			label := fmt.Sprintf(":bell: Pending Requests (%d)", len(pending))
+			actionButtons = append(actionButtons, slacklib.NewButtonBlockElement(
+				ActionOpenPendingRequests, "open",
+				slacklib.NewTextBlockObject(slacklib.PlainTextType, label, true, false),
+			))
+		}
 	}
+
+	if hasPermission(perms, permissions.LegislationView) {
+		if hasTrackedBills, _ := store.HasTrackedBills(ctx, pool); hasTrackedBills {
+			actionButtons = append(actionButtons, slacklib.NewButtonBlockElement(
+				ActionOpenLegislation, "open",
+				slacklib.NewTextBlockObject(slacklib.PlainTextType, ":bookmark_tabs: Legislation Tracking", true, false),
+			))
+		}
+	}
+
 	if hasPermission(perms, permissions.MeetingsSchedule) {
 		actionButtons = append(actionButtons, slacklib.NewButtonBlockElement(
 			ActionScheduleMeeting, "schedule_meeting",
@@ -233,17 +232,12 @@ func Publish(ctx context.Context, pool *pgxpool.Pool, encKey []byte, client *sla
 			slacklib.NewTextBlockObject(slacklib.PlainTextType, ":pencil: Manage Meetings", true, false),
 		))
 	}
-	if approverChannelIDs, err := store.GetUserChannelApprovals(ctx, pool, user.ID); err != nil {
-		log.Printf("slack/apphome: list channel approvals for %s: %v", user.ID, err)
-	} else if len(approverChannelIDs) > 0 {
-		pending, _ := store.ListPendingRequestsForChannels(ctx, pool, approverChannelIDs)
-		if len(pending) > 0 {
-			label := fmt.Sprintf(":bell: Pending Requests (%d)", len(pending))
-			actionButtons = append(actionButtons, slacklib.NewButtonBlockElement(
-				ActionOpenPendingRequests, "open",
-				slacklib.NewTextBlockObject(slacklib.PlainTextType, label, true, false),
-			))
-		}
+
+	if hasPermission(perms, permissions.WorkItemsCreate) {
+		actionButtons = append(actionButtons, slacklib.NewButtonBlockElement(
+			ActionReportIssue, "open",
+			slacklib.NewTextBlockObject(slacklib.PlainTextType, ":memo: Report Issue", true, false),
+		))
 	}
 	isAdmin := hasPermission(perms, permissions.RecordingsConfigWrite) || hasPermission(perms, permissions.UploadsConfigWrite)
 	if isAdmin {

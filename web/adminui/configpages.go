@@ -18,6 +18,7 @@ var integInputTypeMap = map[string]string{
 	"delete_after_upload": "boolean",
 	"enabled":             "boolean",
 	"connected_email":     "readonly",
+	"clients":             "list",
 }
 
 func (d Deps) IntegrationsPage() http.HandlerFunc {
@@ -284,6 +285,12 @@ func buildIntegrationListData(ctx context.Context, pool *pgxpool.Pool, encKey []
 			items = append(items, admintempl.IntegrationListItemData{
 				Integration: integ,
 				HasMissing:  hasMissing,
+			})
+		} else if len(entries) == 0 && integ.Enabled {
+			// Credential-less integration (no config_schema rows): promote to
+			// the enabled list when enabled rather than stranding it in "available".
+			items = append(items, admintempl.IntegrationListItemData{
+				Integration: integ,
 			})
 		} else {
 			available = append(available, integ)

@@ -203,10 +203,21 @@ func runOpenStatesSyncWithJob(ctx context.Context, pool *pgxpool.Pool, encKey []
 		job.ID, totalImported, totalUpdated, totalSkipped)
 }
 
+// parseLegistarClients splits a newline-separated config value into individual
+// client subdomains, trimming whitespace and dropping empty lines.
+func parseLegistarClients(val string) []string {
+	var clients []string
+	for _, line := range strings.Split(val, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			clients = append(clients, line)
+		}
+	}
+	return clients
+}
+
 // runLegistarSyncWithJob wraps the Legistar sync in a job record.
 func runLegistarSyncWithJob(ctx context.Context, pool *pgxpool.Pool, encKey []byte, notifier platform.Notifier) {
-	// Legistar integration is seeded per client; we'll create one job per distinct client.
-	// For simplicity, create a single job for the first Legistar integration found.
 	integrations, err := store.ListIntegrationsByType(ctx, pool, "legistar")
 	if err != nil {
 		log.Printf("legislation/sync: list legistar integrations: %v", err)
@@ -217,6 +228,17 @@ func runLegistarSyncWithJob(ctx context.Context, pool *pgxpool.Pool, encKey []by
 		return
 	}
 	integration := integrations[0]
+
+	clientsVal, err := store.GetServiceConfig(ctx, pool, "legistar", "clients", encKey)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		log.Printf("legislation/sync: read legistar/clients: %v", err)
+		return
+	}
+	clients := parseLegistarClients(clientsVal)
+	if len(clients) == 0 {
+		log.Printf("legislation/sync: no legistar clients configured")
+		return
+	}
 
 	job := &store.Job{
 		Type:    store.JobTypeLegistarSync,
@@ -243,17 +265,27 @@ func runLegistarSyncWithJob(ctx context.Context, pool *pgxpool.Pool, encKey []by
 
 	log.Printf("legislation/sync: starting Legistar job %s", job.ID)
 
-	// Run the actual sync.
-	bodies, err := store.ListActiveBodiesBySource(ctx, pool, "legistar")
-	if err != nil {
-		log.Printf("legislation/sync: list legistar bodies: %v", err)
-		_ = store.FailJob(ctx, pool, job.ID, fmt.Sprintf("list bodies: %v", err))
-		return
-	}
-
 	totalImported, totalUpdated := 0, 0
-	for _, body := range bodies {
-		imported, updated, err := syncLegistarWithCounts(ctx, pool, encKey, notifier, body)
+	for _, client := range clients {
+		body, err := store.GetLegislativeBodyByClient(ctx, pool, client)
+		if err != nil {
+			if !errors.Is(err, store.ErrNotFound) {
+				log.Printf("legislation/sync: lookup body for client %q: %v", client, err)
+				continue
+			}
+			body = &store.LegislativeBody{
+				Name:           client,
+				Level:          "local",
+				DataSource:     "legistar",
+				LegistarClient: &client,
+				Active:         true,
+			}
+			if err := store.CreateLegislativeBody(ctx, pool, body); err != nil {
+				log.Printf("legislation/sync: create body for client %q: %v", client, err)
+				continue
+			}
+		}
+		imported, updated, err := syncLegistarWithCounts(ctx, pool, encKey, notifier, *body)
 		if err != nil {
 			log.Printf("legislation/sync: legistar body %q: %v", body.Name, err)
 			continue
@@ -423,6 +455,12 @@ func processOpenStatesBill(
 		return
 	}
 
+	if len(ab.Subjects) > 0 {
+		if err := store.UpsertBodySubjects(ctx, pool, body.ID, ab.Subjects); err != nil {
+			log.Printf("legislation/sync: upsert subjects for body %s: %v", body.ID, err)
+		}
+	}
+
 	if existing != nil {
 		notifyIfChanged(ctx, pool, encKey, notifier, b.ID, "status", oldStatus, b.Status, "openstates")
 		notifyIfChanged(ctx, pool, encKey, notifier, b.ID, "latest_action", oldLatestAction, b.LatestAction, "openstates")
@@ -572,8 +610,8 @@ func processLegistarMatter(
 		identifier = strconv.Itoa(m.MatterID)
 	}
 
-	legistarURL := fmt.Sprintf("https://%s.legistar.com/LegislationDetail.aspx?ID=%d&GUID=%s",
-		legistarClient, m.MatterID, m.MatterGUID)
+	legistarURL := fmt.Sprintf("https://%s.legistar.com/gateway.aspx?m=l&id=/matter.aspx?key=%d",
+		legistarClient, m.MatterID)
 
 	var introDate *time.Time
 	if m.MatterIntroDate != nil {
@@ -918,6 +956,12 @@ func processOpenStatesBillWithCounts(
 		return
 	}
 
+	if len(ab.Subjects) > 0 {
+		if err := store.UpsertBodySubjects(ctx, pool, body.ID, ab.Subjects); err != nil {
+			log.Printf("legislation/sync: upsert subjects for body %s: %v", body.ID, err)
+		}
+	}
+
 	if existing == nil {
 		// New bill imported.
 		*imported++
@@ -999,8 +1043,8 @@ func processLegistarMatterWithCounts(
 		identifier = strconv.Itoa(m.MatterID)
 	}
 
-	legistarURL := fmt.Sprintf("https://%s.legistar.com/LegislationDetail.aspx?ID=%d&GUID=%s",
-		legistarClient, m.MatterID, m.MatterGUID)
+	legistarURL := fmt.Sprintf("https://%s.legistar.com/gateway.aspx?m=l&id=/matter.aspx?key=%d",
+		legistarClient, m.MatterID)
 
 	var introDate *time.Time
 	if m.MatterIntroDate != nil {

@@ -108,6 +108,44 @@ func boolRowData(e ConfigEntryView) string {
 }`, val)
 }
 
+// listRowData builds Alpine x-data for a list config entry (add/remove rows).
+// The value is stored as a single newline-joined string; the UI presents
+// individual rows with add/remove buttons.
+func listRowData(e ConfigEntryView) string {
+	var rows []string
+	if e.Value != "" {
+		for _, r := range strings.Split(e.Value, "\n") {
+			r = strings.TrimSpace(r)
+			if r != "" {
+				rows = append(rows, r)
+			}
+		}
+	}
+	rowsJSON, _ := json.Marshal(rows)
+	configured := e.Configured
+	return fmt.Sprintf(`{ rows: %s, newRow: '', configured: %v, errMsg: '',
+  async save(service, key, val) {
+    this.errMsg = '';
+    try {
+      const r = await fetch('/api/config/' + service + '/' + key, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({value: val}) });
+      if (!r.ok) throw new Error('Save failed');
+      this.configured = val !== '';
+    } catch { this.errMsg = 'Failed to save' }
+  },
+  add(service, key) {
+    const v = this.newRow.trim();
+    if (!v) return;
+    this.rows.push(v);
+    this.newRow = '';
+    this.save(service, key, this.rows.join('\n'));
+  },
+  remove(service, key, i) {
+    this.rows.splice(i, 1);
+    this.save(service, key, this.rows.join('\n'));
+  }
+}`, rowsJSON, configured)
+}
+
 // StorageLocationsCard renders the storage locations section.
 func StorageLocationsCard(integrationID string, locations []store.StorageLocation) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
@@ -164,7 +202,7 @@ func StorageLocationsCard(integrationID string, locations []store.StorageLocatio
 					var templ_7745c5c3_Var3 string
 					templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(loc.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 114, Col: 66}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 152, Col: 66}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 					if templ_7745c5c3_Err != nil {
@@ -177,7 +215,7 @@ func StorageLocationsCard(integrationID string, locations []store.StorageLocatio
 					var templ_7745c5c3_Var4 string
 					templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(loc.Path)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 115, Col: 105}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 153, Col: 105}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 					if templ_7745c5c3_Err != nil {
@@ -190,7 +228,7 @@ func StorageLocationsCard(integrationID string, locations []store.StorageLocatio
 					var templ_7745c5c3_Var5 string
 					templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs("/api/storage-locations/" + loc.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 123, Col: 56}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 161, Col: 56}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 					if templ_7745c5c3_Err != nil {
@@ -218,7 +256,7 @@ func StorageLocationsCard(integrationID string, locations []store.StorageLocatio
 									.catch(() => { errMsg = 'Failed to add'; saving = false; })
 							`)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 174, Col: 8}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 212, Col: 8}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 			if templ_7745c5c3_Err != nil {
@@ -359,7 +397,7 @@ func integrationListCard(item IntegrationListItemData) templ.Component {
 		var templ_7745c5c3_Var11 string
 		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs("{ ...(" + enableToggleData(item.Integration.ID, item.Integration.Enabled) + ")}")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 217, Col: 92}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 255, Col: 92}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 		if templ_7745c5c3_Err != nil {
@@ -372,7 +410,7 @@ func integrationListCard(item IntegrationListItemData) templ.Component {
 		var templ_7745c5c3_Var12 string
 		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(item.Integration.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 220, Col: 136}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 258, Col: 136}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 		if templ_7745c5c3_Err != nil {
@@ -395,7 +433,7 @@ func integrationListCard(item IntegrationListItemData) templ.Component {
 		var templ_7745c5c3_Var13 templ.SafeURL
 		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/admin/integrations/" + item.Integration.Type))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 239, Col: 68}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 277, Col: 68}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 		if templ_7745c5c3_Err != nil {
@@ -449,7 +487,7 @@ func IntegrationDetailPage(data IntegrationDetailData) templ.Component {
 			var templ_7745c5c3_Var16 string
 			templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs("{ ...(" + enableToggleData(data.Integration.ID, data.Integration.Enabled) + ")}")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 253, Col: 93}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 291, Col: 93}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 			if templ_7745c5c3_Err != nil {
@@ -462,7 +500,7 @@ func IntegrationDetailPage(data IntegrationDetailData) templ.Component {
 			var templ_7745c5c3_Var17 string
 			templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(data.Integration.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 255, Col: 54}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 293, Col: 54}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 			if templ_7745c5c3_Err != nil {
@@ -480,7 +518,7 @@ func IntegrationDetailPage(data IntegrationDetailData) templ.Component {
 				var templ_7745c5c3_Var18 string
 				templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs("/admin/fragments/integrations/" + data.Integration.Type + "/setup")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 273, Col: 80}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 311, Col: 80}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 				if templ_7745c5c3_Err != nil {
@@ -503,7 +541,7 @@ func IntegrationDetailPage(data IntegrationDetailData) templ.Component {
 				var templ_7745c5c3_Var19 string
 				templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs("/admin/fragments/config/" + data.Integration.Type + "?reveal=true")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 286, Col: 83}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 324, Col: 83}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 				if templ_7745c5c3_Err != nil {
@@ -516,7 +554,7 @@ func IntegrationDetailPage(data IntegrationDetailData) templ.Component {
 				var templ_7745c5c3_Var20 string
 				templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs("#cred-table-" + data.Integration.Type)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 287, Col: 57}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 325, Col: 57}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 				if templ_7745c5c3_Err != nil {
@@ -578,7 +616,7 @@ func credentialTableSection(service string, entries []ConfigEntryView, revealed 
 		var templ_7745c5c3_Var22 string
 		templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs("cred-table-" + service)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 302, Col: 34}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 340, Col: 34}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 		if templ_7745c5c3_Err != nil {
@@ -597,6 +635,11 @@ func credentialTableSection(service string, entries []ConfigEntryView, revealed 
 			for _, e := range entries {
 				if e.InputType == "boolean" {
 					templ_7745c5c3_Err = boolConfigRow(service, e).Render(ctx, templ_7745c5c3_Buffer)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+				} else if e.InputType == "list" {
+					templ_7745c5c3_Err = listConfigRow(service, e).Render(ctx, templ_7745c5c3_Buffer)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -674,7 +717,7 @@ func boolConfigRow(service string, e ConfigEntryView) templ.Component {
 		var templ_7745c5c3_Var25 string
 		templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(boolRowData(e))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 323, Col: 140}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 363, Col: 140}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 		if templ_7745c5c3_Err != nil {
@@ -687,7 +730,7 @@ func boolConfigRow(service string, e ConfigEntryView) templ.Component {
 		var templ_7745c5c3_Var26 string
 		templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(e.Label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 325, Col: 60}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 365, Col: 60}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 		if templ_7745c5c3_Err != nil {
@@ -700,7 +743,7 @@ func boolConfigRow(service string, e ConfigEntryView) templ.Component {
 		var templ_7745c5c3_Var27 string
 		templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(e.Key)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 326, Col: 67}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 366, Col: 67}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 		if templ_7745c5c3_Err != nil {
@@ -718,7 +761,7 @@ func boolConfigRow(service string, e ConfigEntryView) templ.Component {
 			var templ_7745c5c3_Var28 string
 			templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(e.Description)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 328, Col: 67}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 368, Col: 67}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 			if templ_7745c5c3_Err != nil {
@@ -745,7 +788,7 @@ func boolConfigRow(service string, e ConfigEntryView) templ.Component {
 	})
 }
 
-func channelEditInput(service string, e ConfigEntryView) templ.Component {
+func listConfigRow(service string, e ConfigEntryView) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -766,7 +809,124 @@ func channelEditInput(service string, e ConfigEntryView) templ.Component {
 			templ_7745c5c3_Var29 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, "<div x-init=\"loadChannels()\" class=\"control is-expanded\"><template x-if=\"loadingChannels\"><span class=\"is-size-7 has-text-grey\">Loading channels…</span></template><template x-if=\"!loadingChannels\"><div class=\"select is-small is-fullwidth\"><select x-model=\"val\"><option value=\"\">— Select a channel —</option><template x-for=\"ch in channels\" :key=\"ch.id\"><option :value=\"ch.id\" :selected=\"ch.id === val\" x-text=\"'#' + ch.name\"></option></template></select></div></template></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, "<div style=\"border-bottom: 1px solid var(--bulma-border)\" x-data=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var30 string
+		templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(listRowData(e))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 378, Col: 82}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "\"><div class=\"columns mb-0 is-align-items-start\" style=\"margin: 0\"><div class=\"column is-narrow py-4\" style=\"min-width: 13rem; max-width: 13rem; overflow-wrap: break-word; word-break: break-word\"><div class=\"has-text-weight-semibold is-size-7\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var31 string
+		templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(e.Label)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 381, Col: 61}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "</div><div class=\"is-family-monospace is-size-7 has-text-grey\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var32 string
+		templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(e.Key)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 382, Col: 68}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "</div>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if e.Description != "" {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "<div class=\"is-size-7 has-text-grey-light mt-1\">")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var33 string
+			templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.JoinStringErrs(e.Description)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 384, Col: 68}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var33))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, "</div>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 52, "</div><div class=\"column py-4\"><span x-show=\"errMsg\" x-text=\"errMsg\" role=\"alert\" class=\"help is-danger\"></span><template x-if=\"rows.length === 0\"><p class=\"is-size-7 has-text-grey is-italic mb-2\">None configured.</p></template><template x-for=\"(row, i) in rows\" :key=\"i\"><div class=\"is-flex is-align-items-center mb-1\" style=\"gap: 0.5rem\"><span class=\"is-family-monospace is-size-7\" x-text=\"row\"></span> <button x-on:click=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var34 string
+		templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(`remove('` + service + `', '` + e.Key + `', i)`)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 395, Col: 74}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "\" class=\"button is-danger is-outlined is-small\">Remove</button></div></template><div class=\"field has-addons mt-2\"><div class=\"control is-expanded\"><input type=\"text\" x-model=\"newRow\" placeholder=\"e.g. jacksonco\" class=\"input is-small is-family-monospace\"></div><div class=\"control\"><button x-on:click=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var35 string
+		templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(`add('` + service + `', '` + e.Key + `')`)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 403, Col: 68}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 54, "\" class=\"button is-primary is-small\">Add</button></div></div></div></div></div>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		return nil
+	})
+}
+
+func channelEditInput(service string, e ConfigEntryView) templ.Component {
+	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
+		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
+			return templ_7745c5c3_CtxErr
+		}
+		templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
+		if !templ_7745c5c3_IsBuffer {
+			defer func() {
+				templ_7745c5c3_BufErr := templruntime.ReleaseBuffer(templ_7745c5c3_Buffer)
+				if templ_7745c5c3_Err == nil {
+					templ_7745c5c3_Err = templ_7745c5c3_BufErr
+				}
+			}()
+		}
+		ctx = templ.InitializeContext(ctx)
+		templ_7745c5c3_Var36 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var36 == nil {
+			templ_7745c5c3_Var36 = templ.NopComponent
+		}
+		ctx = templ.ClearChildren(ctx)
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 55, "<div x-init=\"loadChannels()\" class=\"control is-expanded\"><template x-if=\"loadingChannels\"><span class=\"is-size-7 has-text-grey\">Loading channels…</span></template><template x-if=\"!loadingChannels\"><div class=\"select is-small is-fullwidth\"><select x-model=\"val\"><option value=\"\">— Select a channel —</option><template x-for=\"ch in channels\" :key=\"ch.id\"><option :value=\"ch.id\" :selected=\"ch.id === val\" x-text=\"'#' + ch.name\"></option></template></select></div></template></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -805,48 +965,48 @@ func AddPluginModalContent(available []store.Integration) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var30 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var30 == nil {
-			templ_7745c5c3_Var30 = templ.NopComponent
+		templ_7745c5c3_Var37 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var37 == nil {
+			templ_7745c5c3_Var37 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "<div class=\"box\"><div class=\"is-flex is-justify-content-space-between is-align-items-center mb-4\"><h2 id=\"integrations-modal-title\" class=\"title is-5 mb-0\">Add Plugin</h2><button type=\"button\" onclick=\"document.getElementById('integrations-modal').close()\" class=\"delete\" aria-label=\"Close\"></button></div><div x-data=\"{ selectedType: '' }\"><div class=\"field\"><label class=\"label\">Plugin</label><div class=\"control\"><div class=\"select is-fullwidth\"><select x-model=\"selectedType\"><option value=\"\">— Select a plugin —</option> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "<div class=\"box\"><div class=\"is-flex is-justify-content-space-between is-align-items-center mb-4\"><h2 id=\"integrations-modal-title\" class=\"title is-5 mb-0\">Add Plugin</h2><button type=\"button\" onclick=\"document.getElementById('integrations-modal').close()\" class=\"delete\" aria-label=\"Close\"></button></div><div x-data=\"{ selectedType: '' }\"><div class=\"field\"><label class=\"label\">Plugin</label><div class=\"control\"><div class=\"select is-fullwidth\"><select x-model=\"selectedType\"><option value=\"\">— Select a plugin —</option> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		for _, integ := range available {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "<option value=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 57, "<option value=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var31 string
-			templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(integ.Type)
+			var templ_7745c5c3_Var38 string
+			templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(integ.Type)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 384, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 458, Col: 34}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "\">")
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var32 string
-			templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(integ.Name)
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 384, Col: 49}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 58, "\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "</option>")
+			var templ_7745c5c3_Var39 string
+			templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(integ.Name)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/integrations.templ`, Line: 458, Col: 49}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 59, "</option>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, "</select></div></div></div><div class=\"field is-grouped is-grouped-right\"><div class=\"control\"><button type=\"button\" x-on:click=\"document.getElementById('integrations-modal').close()\" class=\"button\">Cancel</button></div><div class=\"control\"><button type=\"button\" x-on:click=\"if(selectedType) window.location.href='/admin/integrations/'+selectedType\" :disabled=\"!selectedType\" class=\"button is-primary\">Add Plugin</button></div></div></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "</select></div></div></div><div class=\"field is-grouped is-grouped-right\"><div class=\"control\"><button type=\"button\" x-on:click=\"document.getElementById('integrations-modal').close()\" class=\"button\">Cancel</button></div><div class=\"control\"><button type=\"button\" x-on:click=\"if(selectedType) window.location.href='/admin/integrations/'+selectedType\" :disabled=\"!selectedType\" class=\"button is-primary\">Add Plugin</button></div></div></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
