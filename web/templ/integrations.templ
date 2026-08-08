@@ -100,6 +100,44 @@ func boolRowData(e ConfigEntryView) string {
 }`, val)
 }
 
+// listRowData builds Alpine x-data for a list config entry (add/remove rows).
+// The value is stored as a single newline-joined string; the UI presents
+// individual rows with add/remove buttons.
+func listRowData(e ConfigEntryView) string {
+	var rows []string
+	if e.Value != "" {
+		for _, r := range strings.Split(e.Value, "\n") {
+			r = strings.TrimSpace(r)
+			if r != "" {
+				rows = append(rows, r)
+			}
+		}
+	}
+	rowsJSON, _ := json.Marshal(rows)
+	configured := e.Configured
+	return fmt.Sprintf(`{ rows: %s, newRow: '', configured: %v, errMsg: '',
+  async save(service, key, val) {
+    this.errMsg = '';
+    try {
+      const r = await fetch('/api/config/' + service + '/' + key, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({value: val}) });
+      if (!r.ok) throw new Error('Save failed');
+      this.configured = val !== '';
+    } catch { this.errMsg = 'Failed to save' }
+  },
+  add(service, key) {
+    const v = this.newRow.trim();
+    if (!v) return;
+    this.rows.push(v);
+    this.newRow = '';
+    this.save(service, key, this.rows.join('\n'));
+  },
+  remove(service, key, i) {
+    this.rows.splice(i, 1);
+    this.save(service, key, this.rows.join('\n'));
+  }
+}`, rowsJSON, configured)
+}
+
 // StorageLocationsCard renders the storage locations section.
 templ StorageLocationsCard(integrationID string, locations []store.StorageLocation) {
 	@SectionedCard("Storage Locations", nil) {
@@ -306,6 +344,8 @@ templ credentialTableSection(service string, entries []ConfigEntryView, revealed
 			for _, e := range entries {
 				if e.InputType == "boolean" {
 					@boolConfigRow(service, e)
+				} else if e.InputType == "list" {
+					@listConfigRow(service, e)
 				} else {
 					@textConfigRow(service, e, revealed)
 				}
@@ -330,6 +370,40 @@ templ boolConfigRow(service string, e ConfigEntryView) {
 		</div>
 		<div style="flex-shrink: 0">
 			@ToggleButton("val === 'true'", "toggle('"+service+"', '"+e.Key+"')", "Toggle "+e.Label)
+		</div>
+	</div>
+}
+
+templ listConfigRow(service string, e ConfigEntryView) {
+	<div style="border-bottom: 1px solid var(--bulma-border)" x-data={ listRowData(e) }>
+		<div class="columns mb-0 is-align-items-start" style="margin: 0">
+			<div class="column is-narrow py-4" style="min-width: 13rem; max-width: 13rem; overflow-wrap: break-word; word-break: break-word">
+				<div class="has-text-weight-semibold is-size-7">{ e.Label }</div>
+				<div class="is-family-monospace is-size-7 has-text-grey">{ e.Key }</div>
+				if e.Description != "" {
+					<div class="is-size-7 has-text-grey-light mt-1">{ e.Description }</div>
+				}
+			</div>
+			<div class="column py-4">
+				<span x-show="errMsg" x-text="errMsg" role="alert" class="help is-danger"></span>
+				<template x-if="rows.length === 0">
+					<p class="is-size-7 has-text-grey is-italic mb-2">None configured.</p>
+				</template>
+				<template x-for="(row, i) in rows" :key="i">
+					<div class="is-flex is-align-items-center mb-1" style="gap: 0.5rem">
+						<span class="is-family-monospace is-size-7" x-text="row"></span>
+						<button x-on:click={ `remove('` + service + `', '` + e.Key + `', i)` } class="button is-danger is-outlined is-small">Remove</button>
+					</div>
+				</template>
+				<div class="field has-addons mt-2">
+					<div class="control is-expanded">
+						<input type="text" x-model="newRow" placeholder="e.g. jacksonco" class="input is-small is-family-monospace"/>
+					</div>
+					<div class="control">
+						<button x-on:click={ `add('` + service + `', '` + e.Key + `')` } class="button is-primary is-small">Add</button>
+					</div>
+				</div>
+			</div>
 		</div>
 	</div>
 }
