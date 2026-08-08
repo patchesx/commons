@@ -5,6 +5,7 @@
 # Build output
 commons
 tmp/
+.tmp/
 
 # Operator scripts (contain real server addresses / secrets — don't commit).
 # New .sh files are tracked by default; add specific entries here only if a
