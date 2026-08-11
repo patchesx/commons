@@ -275,13 +275,19 @@ func ListChannels(ctx context.Context) ([]SlackChannel, error) {
 		Limit:           1000,
 		ExcludeArchived: true,
 	}
-	channels, _, err := client.GetConversationsContext(ctx, params)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]SlackChannel, len(channels))
-	for i, ch := range channels {
-		out[i] = SlackChannel{ID: ch.ID, Name: ch.Name}
+	var out []SlackChannel
+	for {
+		channels, cursor, err := client.GetConversationsContext(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		for _, ch := range channels {
+			out = append(out, SlackChannel{ID: ch.ID, Name: ch.Name})
+		}
+		if cursor == "" {
+			break
+		}
+		params.Cursor = cursor
 	}
 	return out, nil
 }
