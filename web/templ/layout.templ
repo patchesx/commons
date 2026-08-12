@@ -127,6 +127,22 @@ templ Layout(title string, currentPath string) {
 						actionType: opts.actionType || '',
 						recipientSlackId: opts.recipientSlackId || '',
 
+						emojiModalOpen: false,
+						emojis: [],
+						emojisLoaded: false,
+						emojiSearch: '',
+
+						async init() {
+							try {
+								const r = await fetch('/api/slack/emojis');
+								if (r.ok) this.emojis = await r.json();
+							} catch (e) {
+								// silent — preview just won't render emojis
+							} finally {
+								this.emojisLoaded = true;
+							}
+						},
+
 						insertMention(text) {
 							const ta = this.$refs.msgTextarea;
 							const start = ta.selectionStart;
@@ -138,9 +154,48 @@ templ Layout(title string, currentPath string) {
 							});
 						},
 
+						get filteredEmojis() {
+							const q = this.emojiSearch.toLowerCase().trim();
+							if (!q) return this.emojis;
+							return this.emojis.filter(e => e.name.toLowerCase().includes(q));
+						},
+
+						async openEmojiModal() {
+							this.emojiModalOpen = true;
+							if (!this.emojisLoaded) {
+								try {
+									const r = await fetch('/api/slack/emojis');
+									if (r.ok) this.emojis = await r.json();
+								} finally {
+									this.emojisLoaded = true;
+								}
+							}
+						},
+
+						insertEmoji(name) {
+							this.insertMention(':' + name + ':');
+							this.emojiModalOpen = false;
+							this.emojiSearch = '';
+						},
+
 						get previewHtml() {
 							const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 							let t = esc(this.message);
+							// Extract emojis into placeholders before markdown processing to
+							// prevent * _ ~ ` inside emoji names from being mangled.
+							const emojiMap = {};
+							for (const e of this.emojis) {
+								if (e.url) emojiMap[e.name] = e.url;
+							}
+							const emojiImgs = [];
+							t = t.replace(/:([a-z0-9_+-]+):/g, (match, name) => {
+								if (emojiMap[name]) {
+									const idx = emojiImgs.length;
+									emojiImgs.push('<img src="' + emojiMap[name] + '" alt=":' + name + ':" style="max-width:1.25rem;max-height:1.25rem;vertical-align:middle">');
+									return '\x00E' + idx + '\x00';
+								}
+								return match;
+							});
 							t = t.replace(/&lt;@\{\{user_id\}\}&gt;/g,
 								'<span class="slack-mention">@Joining Member</span>');
 							const u = this.users;
@@ -154,6 +209,10 @@ templ Layout(title string, currentPath string) {
 							t = t.replace(/~((?:[^~]|\n)+?)~/g, '<del>$1</del>');
 							t = t.replace(/`([^`\n]+)`/g, '<code class="slack-code">$1</code>');
 							t = t.replace(/\n/g, '<br>');
+							// Restore emoji images after markdown processing.
+							emojiImgs.forEach((img, idx) => {
+								t = t.split('\x00E' + idx + '\x00').join(img);
+							});
 							return t || '<span class="has-text-grey-light" style="font-style:italic">Nothing to preview</span>';
 						}
 					};
