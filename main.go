@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
+	_ "commons/integrations/core"
 	_ "commons/integrations/discord"
 	_ "commons/integrations/gdrive"
 	_ "commons/integrations/google"
@@ -33,6 +34,8 @@ import (
 	"commons/jobs"
 	"commons/legislation"
 	"commons/plugin"
+	"commons/pipeline"
+	"commons/scheduler"
 	"commons/store"
 	"commons/web"
 	"commons/web/adminui"
@@ -123,28 +126,40 @@ func main() {
 		log.Fatalf("main: plugin init: %v", err)
 	}
 	plugin.RegisterActionType(webhooks.NewCreateResourceAction(pool))
+	plugin.RegisterActionType(&callbackAction{
+		id:    "jobs.meeting_reminders",
+		label: "Send Meeting Reminders",
+		fn:    func(ctx context.Context) error { jobs.SendMeetingReminders(ctx, pool, cfg.EncryptionKey); return nil },
+	})
+	plugin.RegisterActionType(&callbackAction{
+		id:    "jobs.library_overdue",
+		label: "Send Library Overdue Reminders",
+		fn:    func(ctx context.Context) error { return jobs.SendOverdueReminders(ctx, pool, pctx.Notifier()) },
+	})
+	plugin.RegisterActionType(&callbackAction{
+		id:    "legislation.sync",
+		label: "Legislation Sync",
+		fn:    func(ctx context.Context) error { legislation.Sync(ctx, pool, cfg.EncryptionKey, pctx.Notifier()); return nil },
+	})
 	plugin.FinalizeActionTypes()
-	plugin.SetDispatcher(events.NewRunner(pool, cfg.EncryptionKey))
+	eventRunner := events.NewRunner(pool, cfg.EncryptionKey)
+	plugin.SetDispatcher(eventRunner)
 
 	// Resume upload jobs left in "youtube_processing" state.
 	go ytpkg.ResumeProcessingJobs(context.Background(), pool, cfg.EncryptionKey)
 
-	// Register platform-agnostic scheduled jobs that fan out through all active notifiers.
-	// These run after InitAll so the composite notifier is fully populated.
-	pctx.RegisterScheduledJob(
-		"meeting_reminders_enabled", "meeting_reminders_interval_minutes",
-		30*time.Second, func() {
-			jobs.SendMeetingReminders(context.Background(), pool, cfg.EncryptionKey)
-		},
-	)
-	pctx.RegisterScheduledJob(
-		"library_overdue_enabled", "library_overdue_interval_minutes",
-		1*time.Minute, func() {
-			if err := jobs.SendOverdueReminders(context.Background(), pool, pctx.Notifier()); err != nil {
-				log.Printf("main: library overdue reminders: %v", err)
-			}
-		},
-	)
+	// Seed managed scheduled triggers for platform-agnostic jobs (replaces RegisterScheduledJob).
+	seedManagedTrigger(pool, "jobs", "Meeting Reminders", "1m", "jobs.meeting_reminders")
+	seedManagedTrigger(pool, "jobs", "Library Overdue Reminders", "1m", "jobs.library_overdue")
+
+	// Start the scheduled trigger runner (fires scheduled trigger pipelines).
+	go scheduler.Run(context.Background(), pool, cfg.EncryptionKey, pctx)
+
+	// Resume pipelines interrupted by server restart (crashed mid-action or paused).
+	go pipeline.ResumeInterruptedRuns(context.Background(), pool, cfg.EncryptionKey, pctx)
+
+	// Start the resume scheduler (resumes paused pipelines when their delay expires).
+	go pipeline.ResumeScheduler(context.Background(), pool, cfg.EncryptionKey, pctx)
 
 	// Wire plugin-registered nav items into the templ sidebar.
 	navRegs := pctx.ExtraNavItems()
@@ -188,11 +203,6 @@ func main() {
 	// AuditPage — full page and HTMX rows fragment.
 	mux.Handle("GET /admin/audit", webAuth(admin.AuditPage()))
 	mux.Handle("GET /admin/fragments/audit-rows", webAuth(admin.AuditRows()))
-
-	// SchedulerPage — full page, toggle fragment, interval fragment.
-	mux.Handle("GET /admin/scheduler", webAuth(admin.SchedulerPage()))
-	mux.Handle("PATCH /admin/fragments/scheduler/{id}/toggle", webAuth(admin.SchedulerToggle()))
-	mux.Handle("PATCH /admin/fragments/scheduler/{id}/interval", webAuth(admin.SchedulerInterval()))
 
 	// UsersPage — full page, HTMX table fragment, member CRUD, roles, promote, channel approvers.
 	mux.Handle("GET /admin/users", webAuth(admin.UsersPage()))
@@ -250,6 +260,11 @@ func main() {
 	mux.Handle("GET /admin/fragments/triggers/{id}/webhook-form", webAuth(admin.TriggerWebhookEditForm()))
 	mux.Handle("PATCH /admin/fragments/triggers/{id}", webAuth(admin.TriggerWebhookUpdate()))
 	mux.Handle("POST /admin/fragments/triggers/event-pipeline", webAuth(admin.TriggerCreateEventPipeline()))
+	mux.Handle("GET /admin/fragments/triggers/scheduled-form", webAuth(admin.TriggerScheduledForm()))
+	mux.Handle("POST /admin/fragments/triggers/scheduled", webAuth(admin.TriggerScheduledCreate()))
+	mux.Handle("GET /admin/fragments/triggers/{id}/scheduled-form", webAuth(admin.TriggerScheduledEditForm()))
+	mux.Handle("POST /admin/fragments/triggers/{id}/scheduled-update", webAuth(admin.TriggerScheduledUpdate()))
+	mux.Handle("POST /admin/fragments/pipeline-runs/{id}/rerun", webAuth(admin.PipelineRunRerun()))
 	mux.Handle("DELETE /admin/fragments/triggers/{id}", webAuth(admin.TriggerDelete()))
 	mux.Handle("GET /admin/fragments/triggers/{id}/action-add-form", webAuth(admin.TriggerActionAddForm()))
 	mux.Handle("GET /admin/fragments/triggers/{id}/actions/{aid}/edit-form", webAuth(admin.TriggerActionEditForm()))
@@ -476,11 +491,8 @@ func main() {
 	mux.Handle("GET /{$}", webAuth(admin.RootPage()))
 	mux.Handle("GET /fragments/calendar-events", webAuth(admin.CalendarEventsFragment()))
 
-	// Legislation sync — depends on pctx.Notifier() set by SlackPlugin.
-	pctx.RegisterScheduledJob(
-		"legislation_sync_enabled", "legislation_sync_interval_minutes",
-		1*time.Minute, legislationSyncFn,
-	)
+	// Legislation sync — seeded as a managed scheduled trigger.
+	seedManagedTrigger(pool, "legislation", "Legislation Sync", "1m", "legislation.sync")
 
 	if installMode {
 		devMode := os.Getenv("INSTALL_MODE") == "true"
@@ -625,4 +637,40 @@ func splitLines(s string) []string {
 		lines = append(lines, s[start:])
 	}
 	return lines
+}
+
+// callbackAction wraps a func(context.Context) error as a plugin.ActionType.
+// Used for thin-wrapper actions that call existing Go functions.
+type callbackAction struct {
+	id    string
+	label string
+	fn    func(context.Context) error
+}
+
+func (a *callbackAction) ID() string                          { return a.id }
+func (a *callbackAction) Label() string                       { return a.label }
+func (a *callbackAction) RequiredCapabilities() []string      { return nil }
+func (a *callbackAction) OutputSchema() []plugin.DataFieldDef { return nil }
+func (a *callbackAction) ParamSchema() []plugin.ParamDef      { return nil }
+func (a *callbackAction) Execute(ctx context.Context, _ map[string]any, _ plugin.ActionContext) (map[string]any, error) {
+	return nil, a.fn(ctx)
+}
+
+// seedManagedTrigger creates or updates a plugin-managed scheduled trigger
+// with a default action. Safe to call on every startup (idempotent).
+func seedManagedTrigger(pool *pgxpool.Pool, managedBy, name, schedule, actionType string) {
+	st, err := store.UpsertManagedScheduledTrigger(context.Background(), pool, store.UpsertManagedScheduledTriggerParams{
+		Name:      name,
+		Schedule:  schedule,
+		Timezone:  "UTC",
+		ManagedBy: managedBy,
+		Enabled:   true,
+	})
+	if err != nil {
+		log.Printf("main: seed %s trigger: %v", name, err)
+		return
+	}
+	if err := store.EnsureWebhookAction(context.Background(), pool, st.ID, actionType); err != nil {
+		log.Printf("main: seed %s action: %v", actionType, err)
+	}
 }

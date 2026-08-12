@@ -26,6 +26,9 @@ const (
 	JobFeatureMemberPortal      = "member_portal"
 	JobFeatureLegislationSync   = "legislation_sync"
 	JobFeatureMeetingScheduling = "meeting_scheduling"
+	JobFeatureWebhookPipeline   = "webhook_pipeline"
+	JobFeatureScheduledPipeline = "scheduled_pipeline"
+	JobFeatureEventPipeline     = "event_pipeline"
 )
 
 // Job trigger sources.
@@ -33,6 +36,7 @@ const (
 	JobTriggerWebhook   = "webhook"
 	JobTriggerScheduled = "scheduled"
 	JobTriggerManual    = "manual"
+	JobTriggerEvent     = "event"
 )
 
 // JobStatus values — 5-state generic lifecycle.

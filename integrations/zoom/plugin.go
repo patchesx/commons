@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -108,11 +107,22 @@ func (p *ZoomPlugin) Init(pctx plugin.PluginContext) error {
 	pctx.RegisterAuthRoute("DELETE", "/api/meetings/{id}", HandleCancelMeeting(pool, encKey, getAdminID))
 	pctx.RegisterAuthRoute("POST", "/api/zoom/meetings/sync", HandleTriggerMeetingSync(syncFn))
 
-	// Register scheduled job.
-	pctx.RegisterScheduledJob(
-		"zoom_meeting_sync_enabled", "zoom_meeting_sync_interval_minutes",
-		1*time.Minute, syncFn,
-	)
+	// Register sync action and seed managed scheduled trigger.
+	plugin.RegisterActionType(&SyncMeetingsAction{pool: pool, encKey: encKey})
+	st, err := store.UpsertManagedScheduledTrigger(context.Background(), pool, store.UpsertManagedScheduledTriggerParams{
+		Name:      "Zoom Meeting Sync",
+		Schedule:  "1m",
+		Timezone:  "UTC",
+		ManagedBy: "zoom",
+		Enabled:   true,
+	})
+	if err != nil {
+		log.Printf("zoom/plugin: seed scheduled trigger: %v", err)
+	} else {
+		if err := store.EnsureWebhookAction(context.Background(), pool, st.ID, "zoom.sync_meetings"); err != nil {
+			log.Printf("zoom/plugin: seed sync_meetings action: %v", err)
+		}
+	}
 
 	return nil
 }

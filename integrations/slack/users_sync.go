@@ -71,12 +71,15 @@ func SyncAllUsers(ctx context.Context, pool *pgxpool.Pool) {
 	// Track added vs updated (simplified: GetOrCreateUserByIdentity doesn't differentiate).
 	// We'll count each successful upsert as an "update" for now.
 	upserted := 0
+	deactivatedCount := 0
+	botsCount := 0
 	for _, u := range users {
 		if u.IsBot || u.ID == "USLACKBOT" {
 			// Mark any existing users row as bot=true so it's excluded from ListUsers.
 			if err := MarkUserIdentityBot(ctx, pool, u.ID); err != nil {
 				log.Printf("slack/users_sync: mark bot %s: %v", u.ID, err)
 			}
+			botsCount++
 			continue
 		}
 
@@ -84,6 +87,14 @@ func SyncAllUsers(ctx context.Context, pool *pgxpool.Pool) {
 		if u.Deleted {
 			if err := store.UpdateIdentityStatus(ctx, pool, "slack", u.ID, "deactivated"); err != nil {
 				log.Printf("slack/users_sync: update status %s: %v", u.ID, err)
+			} else {
+				deactivatedCount++
+				if err := plugin.Fire(ctx, "slack.member.deactivated", u.ID, map[string]any{
+					"user_id":     u.ID,
+					"sync_job_id": job.ID,
+				}); err != nil {
+					log.Printf("slack/users_sync: member.deactivated trigger %s: %v", u.ID, err)
+				}
 			}
 			continue
 		}
@@ -127,6 +138,17 @@ func SyncAllUsers(ctx context.Context, pool *pgxpool.Pool) {
 		}); err != nil {
 			log.Printf("slack/users_sync: team_join trigger %s: %v", u.ID, err)
 		}
+		if err := plugin.Fire(ctx, "slack.member.upserted", u.ID, map[string]any{
+			"user_id":         u.ID,
+			"user_name":       realName,
+			"display_name":    displayName,
+			"email":           u.Profile.Email,
+			"member_id":       user.ID,
+			"platform_status": platformStatus,
+			"sync_job_id":     job.ID,
+		}); err != nil {
+			log.Printf("slack/users_sync: member.upserted trigger %s: %v", u.ID, err)
+		}
 		upserted++
 	}
 
@@ -144,6 +166,17 @@ func SyncAllUsers(ctx context.Context, pool *pgxpool.Pool) {
 	if err := store.CompleteJob(ctx, pool, job.ID); err != nil {
 		log.Printf("slack/users_sync: complete job: %v", err)
 		return
+	}
+
+	// Fire the completion trigger with summary counts.
+	if err := plugin.Fire(ctx, "slack.member_sync.completed", job.ID, map[string]any{
+		"sync_job_id":         job.ID,
+		"members_upserted":    upserted,
+		"members_deactivated": deactivatedCount,
+		"bots_marked":         botsCount,
+		"integration_id":      integration.ID,
+	}); err != nil {
+		log.Printf("slack/users_sync: member_sync.completed trigger: %v", err)
 	}
 
 	log.Printf("slack/users_sync: job %s complete, upserted %d users", job.ID, upserted)
