@@ -168,3 +168,53 @@ func computeTriggerVars(ctx context.Context, pool *pgxpool.Pool, encKey []byte, 
 	}
 	return vars
 }
+
+// buildActionCondition parses condition form fields into an ActionCondition.
+// Returns nil if no condition_field is set (meaning the action always runs).
+func buildActionCondition(r *http.Request) *store.ActionCondition {
+	field := r.FormValue("condition_field")
+	if field == "" {
+		return nil
+	}
+	cond := &store.ActionCondition{
+		Field:    field,
+		Operator: r.FormValue("condition_operator"),
+	}
+	if v := r.FormValue("condition_value"); v != "" {
+		cond.Value = &v
+	}
+	return cond
+}
+
+// buildRetryConfig parses retry config form fields into a RetryConfig.
+// Returns nil if no retry_max_attempts is set or it's <= 1.
+func buildRetryConfig(r *http.Request) *store.RetryConfig {
+	maxStr := r.FormValue("retry_max_attempts")
+	if maxStr == "" {
+		return nil
+	}
+	max, err := strconv.Atoi(maxStr)
+	if err != nil || max <= 1 {
+		return nil
+	}
+	return &store.RetryConfig{
+		MaxAttempts:  max,
+		Backoff:      r.FormValue("retry_backoff"),
+		InitialDelay: r.FormValue("retry_initial_delay"),
+		MaxDelay:     r.FormValue("retry_max_delay"),
+	}
+}
+
+// buildTimeoutSeconds parses the timeout_seconds form field.
+// Returns nil if empty or invalid.
+func buildTimeoutSeconds(r *http.Request) *int {
+	s := r.FormValue("timeout_seconds")
+	if s == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return nil
+	}
+	return &n
+}

@@ -3,9 +3,9 @@ package matrix
 import (
 	"context"
 	"log"
-	"time"
 
 	"commons/plugin"
+	"commons/store"
 )
 
 type MatrixPlugin struct{}
@@ -30,14 +30,25 @@ func (p *MatrixPlugin) Init(pctx plugin.PluginContext) error {
 
 	plugin.RegisterActionType(&RoomMessageAction{})
 	plugin.RegisterActionType(&DirectMessageAction{})
+	plugin.RegisterActionType(&SyncMembersAction{pool: pool, encKey: encKey})
 
 	pctx.RegisterAuthRoute("GET", "/api/matrix/rooms", HandleListMatrixRooms())
 
-	pctx.RegisterScheduledJob(
-		"matrix_user_sync_enabled", "matrix_user_sync_interval_minutes",
-		1*time.Minute,
-		func() { SyncAllUsers(context.Background(), pool, encKey) },
-	)
+	// Seed managed scheduled trigger for member sync.
+	st, err := store.UpsertManagedScheduledTrigger(context.Background(), pool, store.UpsertManagedScheduledTriggerParams{
+		Name:      "Matrix Member Sync",
+		Schedule:  "1m",
+		Timezone:  "UTC",
+		ManagedBy: "matrix",
+		Enabled:   true,
+	})
+	if err != nil {
+		log.Printf("matrix/plugin: seed scheduled trigger: %v", err)
+	} else {
+		if err := store.EnsureWebhookAction(context.Background(), pool, st.ID, "matrix.sync_members"); err != nil {
+			log.Printf("matrix/plugin: seed sync_members action: %v", err)
+		}
+	}
 
 	go StartSync(context.Background(), pool, encKey)
 

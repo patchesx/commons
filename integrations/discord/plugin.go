@@ -3,7 +3,6 @@ package discord
 import (
 	"context"
 	"log"
-	"time"
 
 	"commons/plugin"
 	"commons/store"
@@ -53,13 +52,22 @@ func (p *DiscordPlugin) Init(pctx plugin.PluginContext) error {
 	// Register the slash command card on the Settings page.
 	pctx.RegisterSettingsCard("settings", "/admin/fragments/settings/discord-commands", HandleCommandCard(pool, encKey))
 
-	// Register scheduled jobs.
-	pctx.RegisterScheduledJob(
-		"discord_user_sync_enabled", "discord_user_sync_interval_minutes",
-		1*time.Minute, func() {
-			SyncAllUsers(context.Background(), pool, encKey)
-		},
-	)
+	// Register sync action and seed managed scheduled trigger.
+	plugin.RegisterActionType(&SyncMembersAction{pool: pool, encKey: encKey})
+	st, err := store.UpsertManagedScheduledTrigger(context.Background(), pool, store.UpsertManagedScheduledTriggerParams{
+		Name:      "Discord Member Sync",
+		Schedule:  "1m",
+		Timezone:  "UTC",
+		ManagedBy: "discord",
+		Enabled:   true,
+	})
+	if err != nil {
+		log.Printf("discord/plugin: seed scheduled trigger: %v", err)
+	} else {
+		if err := store.EnsureWebhookAction(context.Background(), pool, st.ID, "discord.sync_members"); err != nil {
+			log.Printf("discord/plugin: seed sync_members action: %v", err)
+		}
+	}
 
 	// Start the Gateway WebSocket in the background.
 	go func() {

@@ -138,7 +138,7 @@ func SetTriggerSourceEnabled(ctx context.Context, pool *pgxpool.Pool, id string,
 // ordered by position then created_at.
 func ListPipelineActions(ctx context.Context, pool *pgxpool.Pool, triggerID, runOn string) ([]WebhookAction, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, trigger_id, type, params, position, run_on, variant_cursor
+		SELECT id, trigger_id, type, params, position, run_on, variant_cursor, condition, action_group, retry_config, timeout_seconds
 		FROM pipeline_actions
 		WHERE trigger_id = $1 AND run_on = $2
 		ORDER BY position, created_at`, triggerID, runOn)
@@ -150,12 +150,66 @@ func ListPipelineActions(ctx context.Context, pool *pgxpool.Pool, triggerID, run
 	var out []WebhookAction
 	for rows.Next() {
 		var a WebhookAction
-		var raw []byte
-		if err := rows.Scan(&a.ID, &a.WebhookID, &a.Type, &raw, &a.Position, &a.RunOn, &a.VariantCursor); err != nil {
+		var raw, rawCondition, rawRetry []byte
+		if err := rows.Scan(&a.ID, &a.WebhookID, &a.Type, &raw, &a.Position, &a.RunOn, &a.VariantCursor, &rawCondition, &a.ActionGroup, &rawRetry, &a.TimeoutSeconds); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(raw, &a.Params); err != nil {
 			a.Params = map[string]any{}
+		}
+		if len(rawCondition) > 0 {
+			var cond ActionCondition
+			if json.Unmarshal(rawCondition, &cond) == nil {
+				a.Condition = &cond
+			}
+		}
+		if len(rawRetry) > 0 {
+			var rc RetryConfig
+			if json.Unmarshal(rawRetry, &rc) == nil {
+				a.RetryConfig = &rc
+			}
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// --- HTTP webhook view ---
+
+// ListActionsByGroup returns pipeline_actions for a trigger source filtered by
+// action_group, ordered by position. Used by core.for_each to load loop body actions.
+func ListActionsByGroup(ctx context.Context, pool *pgxpool.Pool, triggerID, group string) ([]WebhookAction, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT id, trigger_id, type, params, position, run_on, variant_cursor, condition, action_group, retry_config, timeout_seconds
+		FROM pipeline_actions
+		WHERE trigger_id = $1 AND action_group = $2
+		ORDER BY position, created_at`, triggerID, group)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []WebhookAction
+	for rows.Next() {
+		var a WebhookAction
+		var raw, rawCondition, rawRetry []byte
+		if err := rows.Scan(&a.ID, &a.WebhookID, &a.Type, &raw, &a.Position, &a.RunOn, &a.VariantCursor, &rawCondition, &a.ActionGroup, &rawRetry, &a.TimeoutSeconds); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &a.Params); err != nil {
+			a.Params = map[string]any{}
+		}
+		if len(rawCondition) > 0 {
+			var cond ActionCondition
+			if json.Unmarshal(rawCondition, &cond) == nil {
+				a.Condition = &cond
+			}
+		}
+		if len(rawRetry) > 0 {
+			var rc RetryConfig
+			if json.Unmarshal(rawRetry, &rc) == nil {
+				a.RetryConfig = &rc
+			}
 		}
 		out = append(out, a)
 	}
@@ -199,13 +253,34 @@ type WebhookFilter struct {
 
 // WebhookAction is a pipeline_actions row.
 type WebhookAction struct {
-	ID            string
-	WebhookID     string
-	Type          string
-	Params        map[string]any
-	Position      int
-	RunOn         string // "success" | "filter_fail" | "action_fail"
-	VariantCursor int
+	ID             string
+	WebhookID      string
+	Type           string
+	Params         map[string]any
+	Position       int
+	RunOn          string // "success" | "filter_fail" | "action_fail"
+	VariantCursor  int
+	Condition      *ActionCondition // nil = always run
+	ActionGroup    *string          // nil = main flow; non-nil = body action in a for_each loop
+	RetryConfig    *RetryConfig     // nil = no retry
+	TimeoutSeconds *int             // nil = no timeout
+}
+
+// ActionCondition is a single filter expression evaluated before an action runs.
+// If the condition is not met, the action is skipped. nil means always run.
+type ActionCondition struct {
+	Field    string  `json:"field"`
+	Operator string  `json:"operator"` // eq, neq, contains, not_contains, exists, not_exists
+	Value    *string `json:"value,omitempty"`
+}
+
+// RetryConfig configures per-action retry behavior.
+// nil means no retry (default).
+type RetryConfig struct {
+	MaxAttempts  int    `json:"max_attempts"`           // total attempts including the first
+	Backoff      string `json:"backoff"`                // "fixed" or "exponential"
+	InitialDelay string `json:"initial_delay"`          // e.g. "5s"
+	MaxDelay     string `json:"max_delay"`              // e.g. "60s"; caps exponential growth
 }
 
 func runOnOrDefault(s string) string {
@@ -272,7 +347,7 @@ func ListWebhooks(ctx context.Context, pool *pgxpool.Pool, encKey []byte) ([]Web
 	}
 
 	arows, err := pool.Query(ctx, `
-		SELECT id, trigger_id, type, params, position, run_on, variant_cursor
+		SELECT id, trigger_id, type, params, position, run_on, variant_cursor, condition, action_group, retry_config, timeout_seconds
 		FROM pipeline_actions
 		ORDER BY trigger_id, position, created_at`)
 	if err != nil {
@@ -281,12 +356,24 @@ func ListWebhooks(ctx context.Context, pool *pgxpool.Pool, encKey []byte) ([]Web
 	defer arows.Close()
 	for arows.Next() {
 		var a WebhookAction
-		var raw []byte
-		if err := arows.Scan(&a.ID, &a.WebhookID, &a.Type, &raw, &a.Position, &a.RunOn, &a.VariantCursor); err != nil {
+		var raw, rawCondition, rawRetry []byte
+		if err := arows.Scan(&a.ID, &a.WebhookID, &a.Type, &raw, &a.Position, &a.RunOn, &a.VariantCursor, &rawCondition, &a.ActionGroup, &rawRetry, &a.TimeoutSeconds); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(raw, &a.Params); err != nil {
 			a.Params = map[string]any{}
+		}
+		if len(rawCondition) > 0 {
+			var cond ActionCondition
+			if json.Unmarshal(rawCondition, &cond) == nil {
+				a.Condition = &cond
+			}
+		}
+		if len(rawRetry) > 0 {
+			var rc RetryConfig
+			if json.Unmarshal(rawRetry, &rc) == nil {
+				a.RetryConfig = &rc
+			}
 		}
 		if idx, ok := idxByID[a.WebhookID]; ok {
 			out[idx].Actions = append(out[idx].Actions, a)
@@ -493,7 +580,7 @@ func DeleteWebhook(ctx context.Context, pool *pgxpool.Pool, id string) error {
 
 func listWebhookActions(ctx context.Context, pool *pgxpool.Pool, triggerID string) ([]WebhookAction, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, trigger_id, type, params, position, run_on, variant_cursor
+		SELECT id, trigger_id, type, params, position, run_on, variant_cursor, condition, action_group, retry_config, timeout_seconds
 		FROM pipeline_actions WHERE trigger_id=$1 ORDER BY position, created_at`, triggerID)
 	if err != nil {
 		return nil, err
@@ -503,12 +590,24 @@ func listWebhookActions(ctx context.Context, pool *pgxpool.Pool, triggerID strin
 	var out []WebhookAction
 	for rows.Next() {
 		var a WebhookAction
-		var raw []byte
-		if err := rows.Scan(&a.ID, &a.WebhookID, &a.Type, &raw, &a.Position, &a.RunOn, &a.VariantCursor); err != nil {
+		var raw, rawCondition, rawRetry []byte
+		if err := rows.Scan(&a.ID, &a.WebhookID, &a.Type, &raw, &a.Position, &a.RunOn, &a.VariantCursor, &rawCondition, &a.ActionGroup, &rawRetry, &a.TimeoutSeconds); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(raw, &a.Params); err != nil {
 			a.Params = map[string]any{}
+		}
+		if len(rawCondition) > 0 {
+			var cond ActionCondition
+			if json.Unmarshal(rawCondition, &cond) == nil {
+				a.Condition = &cond
+			}
+		}
+		if len(rawRetry) > 0 {
+			var rc RetryConfig
+			if json.Unmarshal(rawRetry, &rc) == nil {
+				a.RetryConfig = &rc
+			}
 		}
 		out = append(out, a)
 	}
@@ -519,10 +618,14 @@ func listWebhookActions(ctx context.Context, pool *pgxpool.Pool, triggerID strin
 }
 
 type WebhookActionParams struct {
-	Type     string
-	Params   map[string]any
-	Position int
-	RunOn    string // "success" | "filter_fail" | "action_fail"
+	Type           string
+	Params         map[string]any
+	Position       int
+	RunOn          string // "success" | "filter_fail" | "action_fail"
+	Condition      *ActionCondition
+	ActionGroup    *string
+	RetryConfig    *RetryConfig
+	TimeoutSeconds *int
 }
 
 func CreateWebhookAction(ctx context.Context, pool *pgxpool.Pool, webhookID string, p WebhookActionParams) (*WebhookAction, error) {
@@ -530,21 +633,41 @@ func CreateWebhookAction(ctx context.Context, pool *pgxpool.Pool, webhookID stri
 	if err != nil {
 		return nil, err
 	}
+	var rawCondition []byte
+	if p.Condition != nil {
+		rawCondition, _ = json.Marshal(p.Condition)
+	}
+	var rawRetryConfig []byte
+	if p.RetryConfig != nil {
+		rawRetryConfig, _ = json.Marshal(p.RetryConfig)
+	}
 	var id string
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO pipeline_actions (trigger_id, type, params, position, run_on)
-		VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-		webhookID, p.Type, raw, p.Position, runOnOrDefault(p.RunOn)).Scan(&id); err != nil {
+		INSERT INTO pipeline_actions (trigger_id, type, params, position, run_on, condition, action_group, retry_config, timeout_seconds)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+		webhookID, p.Type, raw, p.Position, runOnOrDefault(p.RunOn), rawCondition, p.ActionGroup, rawRetryConfig, p.TimeoutSeconds).Scan(&id); err != nil {
 		return nil, err
 	}
 	var a WebhookAction
-	var rawOut []byte
+	var rawOut, rawCond, rawRetry []byte
 	if err := pool.QueryRow(ctx,
-		`SELECT id, trigger_id, type, params, position, run_on, variant_cursor FROM pipeline_actions WHERE id=$1`, id).
-		Scan(&a.ID, &a.WebhookID, &a.Type, &rawOut, &a.Position, &a.RunOn, &a.VariantCursor); err != nil {
+		`SELECT id, trigger_id, type, params, position, run_on, variant_cursor, condition, action_group, retry_config, timeout_seconds FROM pipeline_actions WHERE id=$1`, id).
+		Scan(&a.ID, &a.WebhookID, &a.Type, &rawOut, &a.Position, &a.RunOn, &a.VariantCursor, &rawCond, &a.ActionGroup, &rawRetry, &a.TimeoutSeconds); err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal(rawOut, &a.Params)
+	if len(rawCond) > 0 {
+		var cond ActionCondition
+		if json.Unmarshal(rawCond, &cond) == nil {
+			a.Condition = &cond
+		}
+	}
+	if len(rawRetry) > 0 {
+		var rc RetryConfig
+		if json.Unmarshal(rawRetry, &rc) == nil {
+			a.RetryConfig = &rc
+		}
+	}
 	return &a, nil
 }
 
@@ -553,19 +676,39 @@ func UpdateWebhookAction(ctx context.Context, pool *pgxpool.Pool, id string, p W
 	if err != nil {
 		return nil, err
 	}
+	var rawCondition []byte
+	if p.Condition != nil {
+		rawCondition, _ = json.Marshal(p.Condition)
+	}
+	var rawRetryConfig []byte
+	if p.RetryConfig != nil {
+		rawRetryConfig, _ = json.Marshal(p.RetryConfig)
+	}
 	if _, err = pool.Exec(ctx,
-		`UPDATE pipeline_actions SET type=$2, params=$3, position=$4, run_on=$5 WHERE id=$1`,
-		id, p.Type, raw, p.Position, runOnOrDefault(p.RunOn)); err != nil {
+		`UPDATE pipeline_actions SET type=$2, params=$3, position=$4, run_on=$5, condition=$6, action_group=$7, retry_config=$8, timeout_seconds=$9 WHERE id=$1`,
+		id, p.Type, raw, p.Position, runOnOrDefault(p.RunOn), rawCondition, p.ActionGroup, rawRetryConfig, p.TimeoutSeconds); err != nil {
 		return nil, err
 	}
 	var a WebhookAction
-	var rawOut []byte
+	var rawOut, rawCond, rawRetry []byte
 	if err := pool.QueryRow(ctx,
-		`SELECT id, trigger_id, type, params, position, run_on, variant_cursor FROM pipeline_actions WHERE id=$1`, id).
-		Scan(&a.ID, &a.WebhookID, &a.Type, &rawOut, &a.Position, &a.RunOn, &a.VariantCursor); err != nil {
+		`SELECT id, trigger_id, type, params, position, run_on, variant_cursor, condition, action_group, retry_config, timeout_seconds FROM pipeline_actions WHERE id=$1`, id).
+		Scan(&a.ID, &a.WebhookID, &a.Type, &rawOut, &a.Position, &a.RunOn, &a.VariantCursor, &rawCond, &a.ActionGroup, &rawRetry, &a.TimeoutSeconds); err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal(rawOut, &a.Params)
+	if len(rawCond) > 0 {
+		var cond ActionCondition
+		if json.Unmarshal(rawCond, &cond) == nil {
+			a.Condition = &cond
+		}
+	}
+	if len(rawRetry) > 0 {
+		var rc RetryConfig
+		if json.Unmarshal(rawRetry, &rc) == nil {
+			a.RetryConfig = &rc
+		}
+	}
 	return &a, nil
 }
 

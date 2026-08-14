@@ -219,6 +219,42 @@ plugin.RegisterActionType(&MyAction{pool: pool, encKey: encKey})
 
 The `ActionContext` provides `JobID()`, `SetPhase()`, and `ClearPhase()` for long-running actions that want to report progress.
 
+### PauseSignal
+
+Actions that need to pause the pipeline (e.g. `core.delay`) return a `plugin.PauseSignal` as an error from `Execute`. The runner detects this and persists the pipeline run as `paused` with a `resume_at` timestamp. The resume scheduler resumes the pipeline when the delay expires.
+
+```go
+func (a *DelayAction) Execute(ctx context.Context, params map[string]any, _ plugin.ActionContext) (map[string]any, error) {
+    d, _ := time.ParseDuration(params["duration"].(string))
+    return nil, plugin.PauseSignal{ResumeAt: time.Now().Add(d)}
+}
+```
+
+### IdempotentAction
+
+Actions that are safe to re-execute with the same params (e.g. lookups, set-property) can implement the optional `IdempotentAction` interface. The runner uses this to warn when retry is configured for non-idempotent actions.
+
+```go
+type IdempotentAction interface {
+    Idempotent() bool
+}
+```
+
+Actions that don't implement this interface are treated as non-idempotent (conservative default).
+
+### Action groups (for_each loops)
+
+Actions can be grouped using the `action_group` column on `pipeline_actions`. The `core.for_each` action loads body actions by their `action_group` and executes them for each item in an array. See [pipeline/README.md](../pipeline/README.md) for the loop execution model.
+
+### Per-action conditions, retry, and timeout
+
+Each `pipeline_actions` row can have:
+- `condition` (JSONB) — a single filter expression evaluated before the action runs; NULL = always run
+- `retry_config` (JSONB) — `{max_attempts, backoff, initial_delay, max_delay}`; NULL = no retry
+- `timeout_seconds` (INT) — max execution time per attempt; NULL = no timeout
+
+These are evaluated by the unified pipeline runner. See [pipeline/README.md](../pipeline/README.md) for details.
+
 ---
 
 ## Trigger types

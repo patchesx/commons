@@ -16,13 +16,14 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"commons/pipeline"
 	"commons/plugin"
 	"commons/store"
 )
 
 // Handler returns an http.HandlerFunc that dispatches incoming webhook calls.
 // Registered at /webhook/{slug...}; allowed methods are enforced per-webhook.
-func Handler(pool *pgxpool.Pool, encKey []byte, cancelRegistry CancelRegistry) http.HandlerFunc {
+func Handler(pool *pgxpool.Pool, encKey []byte, cancelRegistry pipeline.CancelRegistry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slug := r.PathValue("slug")
 
@@ -82,7 +83,18 @@ func Handler(pool *pgxpool.Pool, encKey []byte, cancelRegistry CancelRegistry) h
 			}
 
 			if len(wh.Actions) > 0 {
-				go RunPipeline(context.Background(), pool, encKey, *wh, dataMap, cancelRegistry)
+				source := store.TriggerSource{
+					ID:        wh.ID,
+					Type:      "http.webhook",
+					Name:      wh.Name,
+					Enabled:   wh.Enabled,
+					ManagedBy: wh.ManagedBy,
+					CreatedAt: wh.CreatedAt,
+					UpdatedAt: wh.UpdatedAt,
+				}
+				dataMap["webhook_id"] = wh.ID
+				dataMap["webhook_slug"] = wh.Slug
+				go pipeline.RunPipeline(context.Background(), pool, encKey, source, dataMap, cancelRegistry, true)
 			} else {
 				log.Printf("webhooks: slug=%q processor=%s: no actions configured", slug, *wh.ProcessorType)
 			}

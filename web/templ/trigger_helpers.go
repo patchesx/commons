@@ -175,6 +175,72 @@ func whManagedLabel(wh store.Webhook, labels map[string]string) string {
 	return *wh.ManagedBy
 }
 
+func scheduledManagedLabel(st store.ScheduledTrigger, labels map[string]string) string {
+	if st.ManagedBy == nil || *st.ManagedBy == "" {
+		return ""
+	}
+	if l, ok := labels[*st.ManagedBy]; ok {
+		return l
+	}
+	return *st.ManagedBy
+}
+
+func whConditionField(cond *store.ActionCondition) string {
+	if cond == nil {
+		return ""
+	}
+	return cond.Field
+}
+
+func whConditionOp(cond *store.ActionCondition) string {
+	if cond == nil {
+		return ""
+	}
+	return cond.Operator
+}
+
+func whConditionValue(cond *store.ActionCondition) string {
+	if cond == nil || cond.Value == nil {
+		return ""
+	}
+	return *cond.Value
+}
+
+func whRetryMaxAttempts(cfg *store.RetryConfig) string {
+	if cfg == nil || cfg.MaxAttempts == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d", cfg.MaxAttempts)
+}
+
+func whRetryBackoff(cfg *store.RetryConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Backoff
+}
+
+func whRetryInitialDelay(cfg *store.RetryConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.InitialDelay
+}
+
+func whRetryMaxDelay(cfg *store.RetryConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.MaxDelay
+}
+
+func whTimeoutSeconds(timeout *int) string {
+	if timeout == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d", *timeout)
+}
+
 func whProcessorSchema(procType *string, procs []plugin.ProcessorInfo) []plugin.DataFieldDef {
 	if procType == nil {
 		return nil

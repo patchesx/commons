@@ -3,7 +3,6 @@ package slack
 import (
 	"context"
 	"log"
-	"time"
 
 	"commons/plugin"
 	"commons/store"
@@ -55,12 +54,16 @@ func (p *SlackPlugin) Init(pctx plugin.PluginContext) error {
 
 	// Register trigger types.
 	plugin.RegisterTriggerType(&teamJoinTrigger{})
+	plugin.RegisterTriggerType(&MemberUpsertedTrigger{})
+	plugin.RegisterTriggerType(&MemberDeactivatedTrigger{})
+	plugin.RegisterTriggerType(&MemberSyncCompletedTrigger{})
 
 	// Register action types.
 	plugin.RegisterActionType(&ChannelMessageAction{})
 	plugin.RegisterActionType(&DirectMessageAction{})
 	plugin.RegisterActionType(&HandleEventsAction{pool: pool, encKey: encKey})
 	plugin.RegisterActionType(&HandleInteractionsAction{pool: pool, encKey: encKey, pctx: pctx})
+	plugin.RegisterActionType(&SyncMembersAction{pool: pool, encKey: encKey})
 
 	// Register API routes.
 	pctx.RegisterAuthRoute("GET", "/api/slack/channels", HandleListSlackChannels())
@@ -73,13 +76,21 @@ func (p *SlackPlugin) Init(pctx plugin.PluginContext) error {
 	pctx.RegisterAuthRoute("POST", "/admin/slack/retry-queue/{id}/retry", HandleRetryQueueRetry(pool))
 	pctx.RegisterAuthRoute("DELETE", "/admin/slack/retry-queue/{id}", HandleRetryQueueDelete(pool))
 
-	// Register scheduled jobs.
-	pctx.RegisterScheduledJob(
-		"slack_user_sync_enabled", "slack_user_sync_interval_minutes",
-		1*time.Minute, func() {
-			SyncAllUsers(context.Background(), pool)
-		},
-	)
+	// Seed managed scheduled trigger for member sync (replaces RegisterScheduledJob).
+	st, err := store.UpsertManagedScheduledTrigger(context.Background(), pool, store.UpsertManagedScheduledTriggerParams{
+		Name:      "Slack Member Sync",
+		Schedule:  "1m",
+		Timezone:  "UTC",
+		ManagedBy: "slack",
+		Enabled:   true,
+	})
+	if err != nil {
+		log.Printf("slack/plugin: seed scheduled trigger: %v", err)
+	} else {
+		if err := store.EnsureWebhookAction(context.Background(), pool, st.ID, "slack.sync_members"); err != nil {
+			log.Printf("slack/plugin: seed sync_members action: %v", err)
+		}
+	}
 
 	return nil
 }

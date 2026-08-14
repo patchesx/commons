@@ -2,11 +2,8 @@ package plugin
 
 import (
 	"context"
-	"fmt"
 	"net/http"
-	"strconv"
 	"sync"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -145,48 +142,7 @@ func (c *pluginContext) RegisterIntegrationCard(spec IntegrationCardSpec) {
 
 func (c *pluginContext) ExtraIntegrationCards() []IntegrationCardSpec { return c.integrationCards }
 
-// RegisterScheduledJob launches a goroutine that polls config_store every minute.
-// It runs fn() when the job is enabled and enough time has elapsed since the last run.
-// enabledKey and intervalKey are looked up under service "jobs".
-func (c *pluginContext) RegisterScheduledJob(enabledKey, intervalKey string, startupDelay time.Duration, fn func()) {
-	pool := c.pool
-	encKey := c.encKey
-	go func() {
-		time.Sleep(startupDelay)
-		var lastRun time.Time
-		ticker := time.NewTicker(1 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			enabledStr, err := store.GetServiceConfig(context.Background(), pool, "jobs", enabledKey, encKey)
-			if err != nil {
-				continue
-			}
-			intervalStr, err := store.GetServiceConfig(context.Background(), pool, "jobs", intervalKey, encKey)
-			if err != nil {
-				continue
-			}
-			run, _, err := ShouldRun(enabledStr, intervalStr, lastRun)
-			if err != nil || !run {
-				continue
-			}
-			lastRun = time.Now()
-			fn()
-		}
-	}()
-}
-
-// ShouldRun returns true if the job is enabled and the interval has elapsed since lastRun.
-func ShouldRun(enabledStr, intervalStr string, lastRun time.Time) (bool, time.Duration, error) {
-	if enabledStr != "true" {
-		return false, 0, nil
-	}
-	mins, err := strconv.Atoi(intervalStr)
-	if err != nil {
-		return false, 0, err
-	}
-	if mins <= 0 {
-		return false, 0, fmt.Errorf("interval must be positive, got %d", mins)
-	}
-	interval := time.Duration(mins) * time.Minute
-	return time.Since(lastRun) >= interval, interval, nil
-}
+// RegisterScheduledJob has been removed. Plugins that need scheduled execution
+// should seed a managed scheduled trigger during Init using
+// store.UpsertManagedScheduledTrigger. The scheduler/ package polls for due
+// schedules and fires their pipelines.

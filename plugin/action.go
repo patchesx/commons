@@ -2,9 +2,11 @@ package plugin
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sort"
 	"sync"
+	"time"
 )
 
 // ActionContext provides pipeline-level lifecycle operations to action implementations.
@@ -26,6 +28,34 @@ type NoopActionContext struct{}
 func (NoopActionContext) JobID() string                               { return "" }
 func (NoopActionContext) SetPhase(_ context.Context, _ string) error { return nil }
 func (NoopActionContext) ClearPhase(_ context.Context) error         { return nil }
+
+// PauseSignal is returned by an action to tell the runner to pause execution
+// until ResumeAt. Used by core.delay and any future action that needs to pause.
+// The runner persists the pipeline run state and the resume scheduler resumes
+// it when ResumeAt passes.
+type PauseSignal struct {
+	ResumeAt time.Time
+}
+
+func (p PauseSignal) Error() string {
+	return fmt.Sprintf("pipeline paused until %s", p.ResumeAt)
+}
+
+// IdempotentAction is an optional interface that action types can implement to
+// declare whether they are safe to re-execute with the same params. The runner
+// uses this to decide whether to retry failed actions automatically.
+// Actions that don't implement this interface are treated as non-idempotent
+// (conservative default — no automatic retry).
+type IdempotentAction interface {
+	Idempotent() bool
+}
+
+// IsIdempotent returns true if the action type implements IdempotentAction and
+// declares itself as idempotent.
+func IsIdempotent(at ActionType) bool {
+	ia, ok := at.(IdempotentAction)
+	return ok && ia.Idempotent()
+}
 
 // ActionType is the interface all registered action types must implement.
 type ActionType interface {

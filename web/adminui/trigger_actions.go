@@ -139,10 +139,13 @@ func (d Deps) TriggerActionCreate() http.HandlerFunc {
 			pos = len(actions)
 		}
 		if _, err := store.CreateWebhookAction(ctx, d.Pool, sourceID, store.WebhookActionParams{
-			Type:     actionType,
-			Params:   buildActionParams(r, actionType),
-			Position: pos,
-			RunOn:    runOn,
+			Type:           actionType,
+			Params:         buildActionParams(r, actionType),
+			Position:       pos,
+			RunOn:          runOn,
+			Condition:      buildActionCondition(r),
+			RetryConfig:    buildRetryConfig(r),
+			TimeoutSeconds: buildTimeoutSeconds(r),
 		}); err != nil {
 			FragmentError(w, r, "failed to create action")
 			return
@@ -168,10 +171,13 @@ func (d Deps) TriggerActionUpdate() http.HandlerFunc {
 			runOn = "success"
 		}
 		if _, err := store.UpdateWebhookAction(ctx, d.Pool, actionID, store.WebhookActionParams{
-			Type:     actionType,
-			Params:   buildActionParams(r, actionType),
-			Position: pos,
-			RunOn:    runOn,
+			Type:           actionType,
+			Params:         buildActionParams(r, actionType),
+			Position:       pos,
+			RunOn:          runOn,
+			Condition:      buildActionCondition(r),
+			RetryConfig:    buildRetryConfig(r),
+			TimeoutSeconds: buildTimeoutSeconds(r),
 		}); err != nil {
 			FragmentError(w, r, "failed to update action")
 			return

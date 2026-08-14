@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -96,10 +95,9 @@ type PluginContext interface {
 	UnregisterJob(id string)
 	CancelJob(id string) bool
 
-	// RegisterScheduledJob launches a goroutine that polls config_store every minute.
-	// enabledKey and intervalKey are looked up under service "jobs".
-	// startupDelay is the initial sleep before the first poll.
-	RegisterScheduledJob(enabledKey, intervalKey string, startupDelay time.Duration, fn func())
+	// RegisterScheduledJob has been replaced by the scheduled trigger system
+	// (scheduler/ package + scheduled_trigger_config table). Plugins that need
+	// scheduled execution should seed a managed scheduled trigger during Init.
 
 	// RegisterNavItem adds a navigation item to the admin sidebar.
 	// Called during Init; items appear after the standard nav groups.

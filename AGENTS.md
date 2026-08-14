@@ -34,6 +34,8 @@ Single-binary Go server with Postgres. Plugin-based integration system.
 
 **Plugin system**: Each integration in `integrations/<name>/` self-registers via `init()` / `plugin.Register()`. Plugins implement `plugin.Plugin` and can register routes, scheduled jobs, migrations, and notification backends during `Init()`. Plugins are imported with blank imports in `main.go`.
 
+**Unified pipeline system**: Three trigger types (HTTP webhooks, internal events, scheduled triggers) converge on `pipeline.RunPipeline` — a single execution path with filters, actions, conditions, retry, delays, and durable state. Scheduled triggers replace the old `RegisterScheduledJob` framework (the Scheduler admin page has been removed). See `pipeline/README.md` for the full architecture. The `scheduler/` package polls for due schedules (interval or cron via `robfig/cron/v3`). Pipeline runs are durable (`pipeline_runs` table) — delays survive restarts via the resume scheduler.
+
 **Templ templates** (`a-h/templ` v0.3.1001): Source files are `.templ` in `web/templ/` and `web/htmx/`. Generated `_templ.go` files are **committed**. The Dockerfile runs `templ generate` before `go build`. If you edit a `.templ` file, run:
 ```bash
 templ generate
@@ -61,8 +63,10 @@ before building or the generated Go files will be stale. `templ` is listed as a 
 | `jobs/` | Scheduled job logic (meeting reminders, overdue books, legislation sync) |
 | `legislation/` | Legislative bill tracking |
 | `permissions/` | Permission model |
+| `pipeline/` | Unified pipeline runner — serves webhooks, events, and scheduled triggers |
 | `platform/` | Interfaces shared across integrations (Notifier, RecordingStreamer, etc.) |
 | `plugin/` | Plugin registry, PluginContext, InitAll, scheduled job framework |
+| `scheduler/` | Scheduled trigger runner — polls for due schedules and fires pipelines |
 | `store/` | Database access layer — all SQL queries live here |
 | `util/` | Miscellaneous utilities |
 | `web/` | HTTP middleware, sessions, auth, HTMX/templ assets |
