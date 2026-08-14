@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -289,6 +291,40 @@ func ListChannels(ctx context.Context) ([]SlackChannel, error) {
 		}
 		params.Cursor = cursor
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
+// SlackEmoji is a minimal emoji descriptor returned by ListEmojis.
+type SlackEmoji struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// ListEmojis returns all custom emojis in the workspace via emoji.list.
+// Aliases (whose value is "alias:target") have an empty URL since they have no
+// image of their own.
+func ListEmojis(ctx context.Context) ([]SlackEmoji, error) {
+	client := getClient(ctx)
+	if client == nil {
+		return nil, fmt.Errorf("bot_token not configured")
+	}
+	emojiMap, err := client.GetEmojiContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SlackEmoji, 0, len(emojiMap))
+	for name, url := range emojiMap {
+		if strings.HasPrefix(url, "alias:") {
+			url = ""
+		}
+		out = append(out, SlackEmoji{Name: name, URL: url})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
 	return out, nil
 }
 

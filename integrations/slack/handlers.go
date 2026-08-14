@@ -18,3 +18,16 @@ func HandleListSlackChannels() http.HandlerFunc {
 		httpx.WriteJSON(w, http.StatusOK, channels)
 	}
 }
+
+// HandleListSlackEmojis handles GET /api/slack/emojis.
+// Returns all custom emojis in the workspace for use in the composer picker.
+func HandleListSlackEmojis() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		emojis, err := ListEmojis(r.Context())
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, emojis)
+	}
+}
