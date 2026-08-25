@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     resume_at     TIMESTAMPTZ,
     error_message TEXT,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at  TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_resume ON pipeline_runs (resume_at)
@@ -31,9 +32,9 @@ CREATE TABLE IF NOT EXISTS pipeline_run_steps (
     input_params  JSONB,
     output_data   JSONB,
     error_message TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     started_at    TIMESTAMPTZ,
-    completed_at  TIMESTAMPTZ,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    completed_at  TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_run_steps_run ON pipeline_run_steps (run_id, position);
