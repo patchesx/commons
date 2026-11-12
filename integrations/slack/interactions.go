@@ -718,14 +718,24 @@ func handleBlockAction(ctx context.Context, w http.ResponseWriter, pool *pgxpool
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		events, _ := store.ListCalendarEvents(ctx, pool, calendarID)
-		if _, err := client.OpenViewContext(ctx, payload.TriggerID, CalendarEventListModal(calendarID, events)); err != nil {
+		// Next 60 days of occurrences, capped at 50 to keep the modal usable.
+		now := time.Now()
+		occs, err := store.ListCalendarOccurrences(ctx, pool, calendarID, now, now.AddDate(0, 0, 60))
+		if err != nil {
+			log.Printf("slack/interactions: list calendar occurrences: %v", err)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if len(occs) > 50 {
+			occs = occs[:50]
+		}
+		if _, err := client.OpenViewContext(ctx, payload.TriggerID, CalendarEventListModal(calendarID, occs)); err != nil {
 			log.Printf("slack/interactions: open calendar event list: %v", err)
 		}
 		w.WriteHeader(http.StatusOK)
 
 	case ActionCalendarEventEdit:
-		eventID := action.Value
+		eventID, occurrenceSlot := parseOccurrenceValue(action.Value)
 		actor, err := store.GetUserByExternalID(ctx, pool, "slack", payload.User.ID)
 		if err != nil || actor == nil {
 			w.WriteHeader(http.StatusOK)
@@ -742,20 +752,48 @@ func handleBlockAction(ctx context.Context, w http.ResponseWriter, pool *pgxpool
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if _, err := client.PushViewContext(ctx, payload.TriggerID, CalendarEditEventModal(*event)); err != nil {
+		// Resolve the occurrence being edited (recurring series only).
+		var occ *store.EventOccurrence
+		if event.RRule != "" && !occurrenceSlot.IsZero() {
+			from := occurrenceSlot.Add(-time.Hour)
+			to := occurrenceSlot.Add(time.Hour)
+			occs, oerr := store.ListCalendarOccurrences(ctx, pool, event.CalendarID, from, to)
+			if oerr != nil {
+				log.Printf("slack/interactions: expand occurrence: %v", oerr)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			for i := range occs {
+				if occs[i].ID == eventID && occs[i].OccurrenceStart.Equal(occurrenceSlot) {
+					occ = &occs[i]
+					break
+				}
+			}
+		}
+		if _, err := client.PushViewContext(ctx, payload.TriggerID, CalendarEditEventModal(*event, occ, event.CalendarID)); err != nil {
 			log.Printf("slack/interactions: push calendar edit modal: %v", err)
 		}
 		w.WriteHeader(http.StatusOK)
 
 	case ActionCalendarEventDelete:
-		eventID := action.Value
-		parts := strings.SplitN(payload.View.PrivateMetadata, "|", 2)
+		// Value packs "eventID|occurrenceUnix"; occurrenceUnix is 0 for standalone
+		// events. Series deletes from this button use scope "one" (this event);
+		// series-wide deletes are available in the admin UI.
+		parts := strings.SplitN(action.Value, "|", 2)
 		if len(parts) != 2 {
+			log.Printf("slack/interactions: calendar event delete: bad action value %q", action.Value)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		eventID := parts[0]
+		// Edit-modal PrivateMetadata: eventID|calendarID|occurrenceUnix.
+		meta := strings.SplitN(payload.View.PrivateMetadata, "|", 3)
+		if len(meta) != 3 {
 			log.Printf("slack/interactions: calendar event delete: bad private metadata %q", payload.View.PrivateMetadata)
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		calendarID := parts[1]
+		calendarID := meta[1]
 		actor, err := store.GetUserByExternalID(ctx, pool, "slack", payload.User.ID)
 		if err != nil || actor == nil {
 			w.WriteHeader(http.StatusOK)
@@ -766,13 +804,25 @@ func handleBlockAction(ctx context.Context, w http.ResponseWriter, pool *pgxpool
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if err := store.DeleteCalendarEvent(ctx, pool, eventID); err != nil {
+		occurrenceUnix, _ := strconv.ParseInt(parts[1], 10, 64)
+		scope := store.ScopeOne
+		var occurrence time.Time
+		if occurrenceUnix != 0 {
+			occurrence = time.Unix(occurrenceUnix, 0).UTC()
+		} else {
+			// Standalone events (or template-level deletes) remove the whole event.
+			scope = store.ScopeAll
+		}
+		if err := store.DeleteEventWithScope(ctx, pool, eventID, occurrence, scope); err != nil {
 			log.Printf("slack/interactions: delete calendar event %s: %v", eventID, err)
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		events, _ := store.ListCalendarEvents(ctx, pool, calendarID)
-		if _, err := client.UpdateViewContext(ctx, CalendarEventListModal(calendarID, events), "", payload.View.Hash, payload.View.ID); err != nil {
+		occs, _ := store.ListCalendarOccurrences(ctx, pool, calendarID, time.Now(), time.Now().AddDate(0, 0, 60))
+		if len(occs) > 50 {
+			occs = occs[:50]
+		}
+		if _, err := client.UpdateViewContext(ctx, CalendarEventListModal(calendarID, occs), "", payload.View.Hash, payload.View.ID); err != nil {
 			log.Printf("slack/interactions: update calendar event list after delete: %v", err)
 		}
 		w.WriteHeader(http.StatusOK)
@@ -791,6 +841,57 @@ func handleBlockAction(ctx context.Context, w http.ResponseWriter, pool *pgxpool
 			return
 		}
 		go Publish(context.Background(), pool, encKey, client, payload.User.ID)
+		w.WriteHeader(http.StatusOK)
+
+	case ActionCreateMyCalendar, ActionEditMyCalendar:
+		actor, err := store.GetUserByExternalID(ctx, pool, "slack", payload.User.ID)
+		if err != nil || actor == nil {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		perms, _ := store.GetUserPermissions(ctx, pool, actor.ID)
+		if !hasPermission(perms, permissions.CalendarView) {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		cals, err := store.ListCalendars(ctx, pool)
+		if err != nil || len(cals) == 0 {
+			log.Printf("slack/interactions: my calendar modal: no calendars (%v)", err)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		selected := map[string]bool{}
+		personal, err := store.GetPersonalCalendar(ctx, pool, actor.ID)
+		if err != nil {
+			log.Printf("slack/interactions: get personal calendar: %v", err)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if personal != nil {
+			members, err := store.ListCalendarMembers(ctx, pool, personal.ID)
+			if err != nil {
+				log.Printf("slack/interactions: list personal members: %v", err)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			for _, m := range members {
+				selected[m.ID] = true
+			}
+		}
+		// Resolve the timezone now (Slack profile tz, falling back to the org default)
+		// and stash it in the modal's private metadata for the creation case.
+		tz := ""
+		if info, err := client.GetUserInfoContext(ctx, payload.User.ID); err == nil && info.TZ != "" {
+			if _, lerr := time.LoadLocation(info.TZ); lerr == nil {
+				tz = info.TZ
+			}
+		}
+		if tz == "" {
+			tz = util.DefaultTimezone(ctx, pool, encKey)
+		}
+		if _, err := client.OpenViewContext(ctx, payload.TriggerID, MyCalendarModal(cals, selected, tz)); err != nil {
+			log.Printf("slack/interactions: open my calendar modal: %v", err)
+		}
 		w.WriteHeader(http.StatusOK)
 
 	case ActionRefreshHome:
@@ -921,6 +1022,51 @@ func handleViewSubmission(ctx context.Context, w http.ResponseWriter, pool *pgxp
 		// Read-only modals — nothing to process on submit.
 		w.WriteHeader(http.StatusOK)
 
+	case ModalIDMyCalendar:
+		actor, err := store.GetUserByExternalID(ctx, pool, "slack", payload.User.ID)
+		if err != nil || actor == nil {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		perms, _ := store.GetUserPermissions(ctx, pool, actor.ID)
+		if !hasPermission(perms, permissions.CalendarView) {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var memberIDs []string
+		for _, opt := range payload.View.State.Values["my_cal_members"]["my_cal_members_input"].SelectedOptions {
+			memberIDs = append(memberIDs, opt.Value)
+		}
+		personal, err := store.GetPersonalCalendar(ctx, pool, actor.ID)
+		if err != nil {
+			log.Printf("slack/interactions: get personal calendar: %v", err)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if personal == nil {
+			// First save: create using the timezone resolved when the modal was opened.
+			tz := payload.View.PrivateMetadata
+			if _, terr := time.LoadLocation(tz); terr != nil {
+				tz = util.DefaultTimezone(ctx, pool, encKey)
+			}
+			personal, err = store.CreatePersonalCalendar(ctx, pool, actor.ID, memberIDs, tz)
+			if err != nil {
+				log.Printf("slack/interactions: create personal calendar: %v", err)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		} else if err := store.ReplaceCalendarMembers(ctx, pool, personal.ID, memberIDs); err != nil {
+			log.Printf("slack/interactions: update personal members: %v", err)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// Make My Calendar the active view and republish.
+		if err := store.UpdateUserSelectedCalendar(ctx, pool, actor.ID, personal.ID); err != nil {
+			log.Printf("slack/interactions: select personal calendar: %v", err)
+		}
+		go Publish(context.Background(), pool, encKey, client, payload.User.ID)
+		w.WriteHeader(http.StatusOK)
+
 	case ModalIDCalendarCreateEvent:
 		calendarID := payload.View.PrivateMetadata
 		actor, err := store.GetUserByExternalID(ctx, pool, "slack", payload.User.ID)
@@ -963,19 +1109,28 @@ func handleViewSubmission(ctx context.Context, w http.ResponseWriter, pool *pgxp
 		if u := sv["ce_url"]["ce_url_input"].Value; u != "" {
 			event.URL = &u
 		}
+		rule, rerr := store.BuildRRULE(recStateFromView(sv), event.StartTime)
+		if rerr != nil {
+			modalError(w, "ce_rec_freq", "Invalid recurrence: "+rerr.Error())
+			return
+		}
+		event.RRule = rule
 		if err := store.CreateCalendarEvent(ctx, pool, event); err != nil {
 			log.Printf("slack/interactions: create calendar event: %v", err)
 		}
 		w.WriteHeader(http.StatusOK)
 
 	case ModalIDCalendarEditEvent:
-		parts := strings.SplitN(payload.View.PrivateMetadata, "|", 2)
-		if len(parts) != 2 {
+		// PrivateMetadata: eventID|calendarID|occurrenceUnix (occurrenceUnix is 0
+		// for standalone events and template-level edits).
+		parts := strings.SplitN(payload.View.PrivateMetadata, "|", 3)
+		if len(parts) != 3 {
 			log.Printf("slack/interactions: calendar edit submit: bad private metadata %q", payload.View.PrivateMetadata)
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 		eventID, calendarID := parts[0], parts[1]
+		occurrenceUnix, _ := strconv.ParseInt(parts[2], 10, 64)
 		actor, err := store.GetUserByExternalID(ctx, pool, "slack", payload.User.ID)
 		if err != nil || actor == nil {
 			w.WriteHeader(http.StatusOK)
@@ -1017,7 +1172,34 @@ func handleViewSubmission(ctx context.Context, w http.ResponseWriter, pool *pgxp
 		if u := sv["ce_url"]["ce_url_input"].Value; u != "" {
 			event.URL = &u
 		}
-		if err := store.UpdateCalendarEvent(ctx, pool, event); err != nil {
+
+		scope := store.ScopeOne
+		if occurrenceUnix != 0 {
+			if ba, ok := sv["ce_scope"]["ce_scope_input"]; ok && ba.SelectedOption.Value != "" {
+				scope, err = store.ParseEventScope(ba.SelectedOption.Value)
+				if err != nil {
+					modalError(w, "ce_scope", "Invalid scope")
+					return
+				}
+			}
+		}
+
+		// The rule can only change for standalone events and scope=all edits;
+		// for one/following the recurrence editor is informational.
+		if occurrenceUnix == 0 || scope == store.ScopeAll {
+			rule, rerr := store.BuildRRULE(recStateFromView(sv), event.StartTime)
+			if rerr != nil {
+				modalError(w, "ce_rec_freq", "Invalid recurrence: "+rerr.Error())
+				return
+			}
+			event.RRule = rule
+		}
+
+		var occurrence time.Time
+		if occurrenceUnix != 0 {
+			occurrence = time.Unix(occurrenceUnix, 0).UTC()
+		}
+		if err := store.ApplyEventEdit(ctx, pool, eventID, occurrence, scope, event); err != nil {
 			log.Printf("slack/interactions: update calendar event %s: %v", eventID, err)
 		}
 		w.WriteHeader(http.StatusOK)

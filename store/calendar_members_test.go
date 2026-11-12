@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -131,7 +130,7 @@ func TestListCompositeEventsMergesAndDedupes(t *testing.T) {
 
 	base := time.Now().UTC().Truncate(time.Second).Add(24 * time.Hour)
 	for _, evt := range []CalendarEvent{
-		{Title: "Shared Event", StartTime: base},               // identical in both members
+		{Title: "Shared Event", StartTime: base}, // identical in both members
 		{Title: "Only In A", StartTime: base.Add(1 * time.Hour)},
 		{Title: "Late Event", StartTime: base.Add(3 * time.Hour)},
 	} {
@@ -146,7 +145,7 @@ func TestListCompositeEventsMergesAndDedupes(t *testing.T) {
 		require.NoError(t, CreateCalendarEvent(ctx, pool, &evt))
 	}
 
-	got, err := ListCompositeEvents(ctx, pool, comp.ID, nil)
+	got, err := ListCompositeEvents(ctx, pool, comp.ID)
 	require.NoError(t, err)
 	require.Len(t, got, 4, "shared event should appear once")
 	assert.Equal(t, "Shared Event", got[0].Title)
@@ -170,30 +169,35 @@ func TestListCompositeEventsNested(t *testing.T) {
 	evt.CalendarID = b.ID
 	require.NoError(t, CreateCalendarEvent(ctx, pool, &evt))
 
-	got, err := ListCompositeEvents(ctx, pool, outer.ID, nil)
+	got, err := ListCompositeEvents(ctx, pool, outer.ID)
 	require.NoError(t, err)
 	assert.Len(t, got, 1, "events of a nested member's members should surface")
 }
 
-func TestListCompositeEventsSkipsFailedFeed(t *testing.T) {
+func TestListCompositeEventsIncludesSyncedFeedMember(t *testing.T) {
 	ctx := context.Background()
 	pool, comp, a, _ := setupCompositeFixture(t)
 
+	// Feed members read their synced stored rows — a feed calendar with rows
+	// contributes them to the composite.
 	feed := &Calendar{Name: "Feed Cal", Slug: "feed-cal", Timezone: "UTC"}
 	icalURL := "https://example.com/feed.ics"
 	feed.IcalURL = &icalURL
 	require.NoError(t, CreateCalendar(ctx, pool, feed))
 	require.NoError(t, AddCalendarMembers(ctx, pool, comp.ID, []string{feed.ID}))
+	_, err := ReconcileFeedEvents(ctx, pool, feed.ID, []FeedOccurrence{
+		{UID: "feed-1", Title: "Synced Feed Event", StartTime: time.Now().Add(48 * time.Hour)},
+	})
+	require.NoError(t, err)
 
 	evt := CalendarEvent{Title: "Stored Event", StartTime: time.Now().Add(48 * time.Hour)}
 	evt.CalendarID = a.ID
 	require.NoError(t, CreateCalendarEvent(ctx, pool, &evt))
 
-	fetcher := func(_ context.Context, _ string) ([]CalendarEvent, error) {
-		return nil, errors.New("boom")
-	}
-	got, err := ListCompositeEvents(ctx, pool, comp.ID, fetcher)
+	got, err := ListCompositeEvents(ctx, pool, comp.ID)
 	require.NoError(t, err)
-	assert.Len(t, got, 1, "a failing feed should be skipped, not fail the whole composite")
-	assert.Equal(t, "Stored Event", got[0].Title)
+	assert.Len(t, got, 2, "synced feed member rows merge alongside manual member rows")
+	titles := []string{got[0].Title, got[1].Title}
+	assert.Contains(t, titles, "Stored Event")
+	assert.Contains(t, titles, "Synced Feed Event")
 }

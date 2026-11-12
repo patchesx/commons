@@ -3,6 +3,7 @@ package admintempl
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"commons/store"
@@ -26,6 +27,29 @@ func DerefStr(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// timeAgo renders a coarse human-readable "x ago" for sync status display.
+func timeAgo(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%d minutes ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d hours ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%d days ago", int(d.Hours()/24))
+	}
+}
+
+// viewBtnActive highlights the active view toggle button.
+func viewBtnActive(active bool) string {
+	if active {
+		return " is-info is-selected"
+	}
+	return ""
 }
 
 // calReadOnly reports whether a calendar's events cannot be edited inline:
@@ -75,7 +99,7 @@ func containsString(list []string, s string) bool {
 	return false
 }
 
-templ CalendarsPage(calendars []store.Calendar, selectedCal *store.Calendar, year, month int, grid []CalGridCell, events []store.CalendarEvent, membersByCal map[string][]string) {
+templ CalendarsPage(calendars []store.Calendar, selectedCal *store.Calendar, year, month int, grid []CalGridCell, events []store.EventOccurrence, membersByCal map[string][]string, lastSynced *time.Time, reminders []store.CalendarReminder, view string, agendaDays []AgendaDay, agendaColors map[string]string, agendaStart time.Time, embedBase string) {
 	@Layout("Calendars", "/admin/calendars") {
 		<div>
 			<div class="is-flex is-justify-content-space-between is-align-items-center mb-4">
@@ -169,15 +193,70 @@ templ CalendarsPage(calendars []store.Calendar, selectedCal *store.Calendar, yea
 									This is a composite calendar — it shows events merged from its member calendars. Events can't be added here; edit them on their source calendar.
 								</p>
 							} else if selectedCal.IcalURL != nil && *selectedCal.IcalURL != "" {
-								<p class="is-size-7 has-text-grey mb-3">
-									This calendar uses a live feed — events are read-only. To manage events manually, use Edit &#8594; Import feed &amp; switch to manual. 
-									<em>This will prevent the calendar from being updated automatically going forward.</em>
-								</p>
+								<div class="is-size-7 has-text-grey mb-3">
+									<p>
+										This calendar syncs from a live feed — events are read-only here.
+										if lastSynced != nil {
+											Last synced { timeAgo(*lastSynced) }.
+										} else {
+											Not synced yet.
+										}
+									</p>
+									<div class="is-flex is-align-items-center mt-1" style="gap: 0.5rem">
+										<button
+											hx-post={ "/admin/fragments/calendars/" + selectedCal.ID + "/sync-now" }
+											hx-swap="none"
+											hx-on:htmx:after-request="if(event.detail.successful){ const loc=event.detail.xhr.getResponseHeader('HX-Redirect'); if(loc) window.location.href=loc }"
+											class="button is-small"
+										>Sync now</button>
+										<span>To manage events manually instead, use Edit &#8594; Import feed &amp; switch to manual.</span>
+									</div>
+								</div>
 							}
 							<div id="event-form-area" class="mb-3"></div>
-							@CalendarGridSection(selectedCal.ID, year, month, grid, events, calTimezone(selectedCal), calReadOnly(selectedCal))
-							if !calReadOnly(selectedCal) && len(events) == 0 {
+							<div class="buttons has-addons mb-2">
+								<a
+									href={ templ.URL(fmt.Sprintf("/admin/calendars?cal=%s&year=%d&month=%d&view=month", selectedCal.ID, year, month)) }
+									class={ "button is-small" + viewBtnActive(view == "month") }
+								>Month</a>
+								<a
+									href={ templ.URL(fmt.Sprintf("/admin/calendars?cal=%s&view=agenda", selectedCal.ID)) }
+									class={ "button is-small" + viewBtnActive(view == "agenda") }
+								>Agenda</a>
+							</div>
+							if view == "agenda" {
+								@AgendaSection(selectedCal.ID, agendaStart, agendaDays, agendaColors, calReadOnly(selectedCal))
+							} else {
+								@CalendarGridSection(selectedCal.ID, year, month, grid, events, calTimezone(selectedCal), calReadOnly(selectedCal))
+							}
+							if view != "agenda" && !calReadOnly(selectedCal) && len(events) == 0 {
 								<p class="is-size-7 has-text-grey mt-2 has-text-centered">No events yet — click a day to add one.</p>
+							}
+							if selectedCal.Kind != store.CalendarKindPersonal {
+								<div class="card mt-4">
+									<header class="card-header">
+										<p class="card-header-title is-size-6">Reminders</p>
+									</header>
+									<div class="card-content">
+										<p class="is-size-7 has-text-grey mb-2">
+											Post upcoming events from this calendar to Slack channels ahead of their start time. Composites notify for their members' events — duplicate coverage on the same channel is collapsed automatically.
+										</p>
+										@CalendarRemindersPanel(selectedCal.ID, reminders)
+									</div>
+								</div>
+							}
+							if selectedCal.Slug != "" {
+								<div class="card mt-4">
+									<header class="card-header">
+										<p class="card-header-title is-size-6">Embed</p>
+									</header>
+									<div class="card-content">
+										<p class="is-size-7 has-text-grey mb-2">
+											Add this calendar to any website with an iframe. Builds from the public embed page — the same visibility as the ICS feed.
+										</p>
+										@EmbedBuilderPanel(selectedCal.Slug, selectedCal.Name, embedBase)
+									</div>
+								</div>
 							}
 						</div>
 					} else {
@@ -406,7 +485,7 @@ templ calendarForm(cal *store.Calendar, allCalendars []store.Calendar, memberIDs
 	}
 }
 
-templ CalendarGridSection(calID string, year, month int, grid []CalGridCell, events []store.CalendarEvent, loc *time.Location, readOnly bool) {
+templ CalendarGridSection(calID string, year, month int, grid []CalGridCell, events []store.EventOccurrence, loc *time.Location, readOnly bool) {
 	<div id="cal-grid-section">
 		<div class="is-flex is-justify-content-space-between is-align-items-center mb-2">
 			<button
@@ -501,7 +580,7 @@ templ CalendarGridSection(calID string, year, month int, grid []CalGridCell, eve
 							<div
 								class="is-size-7"
 								style="background: var(--bulma-primary-light); color: var(--bulma-primary-dark); border-radius: 0.25rem; padding: 0 0.25rem; margin-top: 0.125rem; overflow: hidden; cursor: pointer"
-								hx-get={ fmt.Sprintf("/admin/fragments/calendars/%s/events/%s/form", calID, ev.ID) }
+								hx-get={ fmt.Sprintf("/admin/fragments/calendars/%s/events/%s/form", calID, ev.ID) + occQuery(ev) }
 								hx-target="#event-form-area"
 								hx-swap="innerHTML"
 								onclick="event.stopPropagation()"
@@ -514,25 +593,133 @@ templ CalendarGridSection(calID string, year, month int, grid []CalGridCell, eve
 	</div>
 }
 
-templ EventForm(calID string, ev *store.CalendarEvent, errMsg string) {
+// EventFormView carries everything the event form needs: prefilled effective
+// values, recurrence editor state, and occurrence addressing for series edits.
+// reminderRow is one editable reminder row in the panel.
+type reminderRow struct {
+	ChannelID   string
+	LeadMinutes int
+}
+
+templ CalendarRemindersPanel(calID string, reminders []store.CalendarReminder) {
+	{{ rows := make([]reminderRow, 0, len(reminders)+1)
+	   for _, r := range reminders {
+		rows = append(rows, reminderRow{ChannelID: r.ChannelID, LeadMinutes: r.LeadMinutes})
+	   }
+	   if len(rows) == 0 {
+		rows = append(rows, reminderRow{LeadMinutes: 60})
+	   } }}
+	<div
+		x-data={ fmt.Sprintf(`{
+			rows: %s,
+			channels: [],
+			loadingChannels: true,
+			addRow() { this.rows.push({ channel_id: '', lead_minutes: 60 }) },
+			removeRow(i) { this.rows.splice(i, 1) },
+			async loadChannels() {
+				try { const r = await fetch('/api/slack/channels'); if (r.ok) this.channels = await r.json(); } finally { this.loadingChannels = false }
+			}
+		}`, reminderRowsJSON(rows)) }
+		x-init="loadChannels()"
+	>
+		<form
+			hx-post={ "/admin/fragments/calendars/" + calID + "/reminders" }
+			hx-swap="none"
+			hx-on:htmx:after-request="if(event.detail.successful){ const loc=event.detail.xhr.getResponseHeader('HX-Redirect'); if(loc) window.location.href=loc }"
+		>
+			<template x-for="(row, i) in rows" :key="i">
+				<div class="is-flex is-align-items-center mb-2" style="gap: 0.5rem">
+					<input type="hidden" :name="'channel_id_' + i" :value="row.channel_id"/>
+					<input type="hidden" :name="'lead_minutes_' + i" :value="row.lead_minutes"/>
+					<template x-if="loadingChannels">
+						<span class="is-size-7 has-text-grey">Loading channels…</span>
+					</template>
+					<template x-if="!loadingChannels">
+						<div class="select is-small" style="flex: 1">
+							<select x-model="row.channel_id">
+								<option value="">— Select a channel —</option>
+								<template x-for="ch in channels" :key="ch.id">
+									<option :value="ch.id" :selected="ch.id === row.channel_id" x-text="'#' + ch.name"></option>
+								</template>
+							</select>
+						</div>
+					</template>
+					<div class="is-flex is-align-items-center" style="gap: 0.25rem">
+						<input
+							type="number"
+							min="1"
+							x-model.number="row.lead_minutes"
+							class="input is-small"
+							style="width: 5rem"
+							aria-label="Lead minutes"
+						/>
+						<span class="is-size-7 has-text-grey">min before</span>
+					</div>
+					<button type="button" class="button is-small is-danger is-outlined" @click="removeRow(i)" aria-label="Remove reminder">&times;</button>
+				</div>
+			</template>
+			<div class="is-flex is-align-items-center" style="gap: 0.5rem">
+				<button type="button" class="button is-small" @click="addRow()">Add channel</button>
+				<button type="submit" class="button is-primary is-small">Save</button>
+				<span class="is-size-7 has-text-grey">Default 60 minutes.</span>
+			</div>
+		</form>
+	</div>
+}
+
+// reminderRowsJSON serializes rows for Alpine's x-data initializer.
+func reminderRowsJSON(rows []reminderRow) string {
+	var sb strings.Builder
+	sb.WriteByte('[')
+	for i, r := range rows {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		fmt.Fprintf(&sb, `{"channel_id":%q,"lead_minutes":%d}`, r.ChannelID, r.LeadMinutes)
+	}
+	sb.WriteByte(']')
+	return sb.String()
+}
+
+type EventFormView struct {
+	CalendarID string
+	EventID    string
+	// Occurrence is the RFC3339 address of the series occurrence being edited
+	// ("" for standalone events and new events).
+	Occurrence  string
+	IsRecurring bool
+	Ev          *store.CalendarEvent
+	Recurrence  store.RecurrenceState
+	ErrMsg      string
+}
+
+templ EventForm(v EventFormView) {
 	<div class="box mb-4">
 		<h3 class="title is-6 mb-3">
-			if ev != nil && ev.ID != "" {
+			if v.EventID != "" {
 				Edit Event
 			} else {
 				New Event
 			}
 		</h3>
+		{{ recShow := "scope === 'all'"
+		   if !v.IsRecurring {
+			recShow = "true"
+		   } }}
 		<form
-			if ev != nil && ev.ID != "" {
-				hx-patch={ fmt.Sprintf("/admin/fragments/calendars/%s/events/%s", calID, ev.ID) }
+			if v.EventID != "" {
+				hx-patch={ fmt.Sprintf("/admin/fragments/calendars/%s/events/%s", v.CalendarID, v.EventID) }
 			} else {
-				hx-post={ fmt.Sprintf("/admin/fragments/calendars/%s/events", calID) }
+				hx-post={ fmt.Sprintf("/admin/fragments/calendars/%s/events", v.CalendarID) }
 			}
 			hx-target="#event-form-area"
 			hx-swap="innerHTML"
+			x-data={ "{ repeat: '" + v.Recurrence.Freq + "', end: '" + v.Recurrence.End + "', monthlyMode: '" + v.Recurrence.MonthlyMode + "', scope: 'one' }" }
 		>
-			@AlertBox(errMsg, "error")
+			@AlertBox(v.ErrMsg, "error")
+			if v.Occurrence != "" {
+				<input type="hidden" name="occurrence" value={ v.Occurrence }/>
+			}
 			<div class="field mb-3">
 				<label for="ev-title" class="label is-small">Title <span class="has-text-danger" aria-hidden="true">*</span></label>
 				<div class="control">
@@ -540,7 +727,7 @@ templ EventForm(calID string, ev *store.CalendarEvent, errMsg string) {
 						id="ev-title"
 						type="text"
 						name="title"
-						value={ evTitle(ev) }
+						value={ evTitle(v.Ev) }
 						required
 						class="input is-small"
 					/>
@@ -555,7 +742,7 @@ templ EventForm(calID string, ev *store.CalendarEvent, errMsg string) {
 								id="ev-start"
 								type="datetime-local"
 								name="start_time"
-								value={ evStart(ev) }
+								value={ evStart(v.Ev) }
 								required
 								class="input is-small"
 							/>
@@ -570,7 +757,7 @@ templ EventForm(calID string, ev *store.CalendarEvent, errMsg string) {
 								id="ev-end"
 								type="datetime-local"
 								name="end_time"
-								value={ evEnd(ev) }
+								value={ evEnd(v.Ev) }
 								class="input is-small"
 							/>
 						</div>
@@ -586,42 +773,169 @@ templ EventForm(calID string, ev *store.CalendarEvent, errMsg string) {
 						rows="2"
 						class="textarea is-small"
 					>
-						if ev != nil && ev.Description != nil {
-							{ *ev.Description }
+						if v.Ev != nil && v.Ev.Description != nil {
+							{ *v.Ev.Description }
 						}
 					</textarea>
 				</div>
 			</div>
-			<div class="field mb-4">
+			<div class="field mb-3">
 				<label for="ev-location" class="label is-small">Location</label>
 				<div class="control">
 					<input
 						id="ev-location"
 						type="text"
 						name="location"
-						value={ evLocation(ev) }
+						value={ evLocation(v.Ev) }
 						class="input is-small"
 					/>
 				</div>
 			</div>
+			if v.IsRecurring {
+				<div class="field mb-3">
+					<label class="label is-small">Applies to</label>
+					<div class="control">
+						<label class="radio is-block" style="line-height: 1.9">
+							<input type="radio" name="scope" value="one" x-model="scope"/>
+							This event
+						</label>
+						<label class="radio is-block" style="line-height: 1.9">
+							<input type="radio" name="scope" value="following" x-model="scope"/>
+							This and following events
+						</label>
+						<label class="radio is-block" style="line-height: 1.9">
+							<input type="radio" name="scope" value="all" x-model="scope"/>
+							All events (changes the repeat rule)
+						</label>
+					</div>
+					<p class="help has-text-grey">"This event" and "this and following" keep the repeat rule; only "all events" can change it.</p>
+				</div>
+			}
+			<div x-show={ recShow } style="display: none">
+				<div class="field mb-2">
+					<label for="ev-repeat" class="label is-small">Repeat</label>
+					<div class="select is-small">
+						<select id="ev-repeat" name="repeat" x-model="repeat">
+							<option value="none">Does not repeat</option>
+							<option value="daily">Daily</option>
+							<option value="weekly">Weekly</option>
+							<option value="monthly">Monthly</option>
+							<option value="yearly">Yearly</option>
+						</select>
+					</div>
+				</div>
+				<div x-show="repeat !== 'none'" style="display: none">
+					<div class="is-flex is-align-items-center mb-2" style="gap: 0.5rem">
+						<span class="is-size-7">Every</span>
+						<input
+							type="number"
+							name="interval"
+							min="1"
+							value={ strconv.Itoa(recInterval(v.Recurrence)) }
+							class="input is-small"
+							style="width: 4.5rem"
+						/>
+						<span class="is-size-7" x-text="repeat === 'daily' ? 'day(s)' : repeat === 'weekly' ? 'week(s)' : repeat === 'monthly' ? 'month(s)' : 'year(s)'"></span>
+					</div>
+					<div class="field mb-2" x-show="repeat === 'weekly'">
+						<span class="is-size-7 has-text-weight-semibold">On days</span>
+						<div class="is-flex" style="gap: 0.5rem; flex-wrap: wrap; margin-top: 0.25rem">
+							for _, wd := range []string{"MO", "TU", "WE", "TH", "FR", "SA", "SU"} {
+								<label class="is-size-7" style="line-height: 1.9">
+									<input
+										type="checkbox"
+										name="byday"
+										value={ wd }
+										checked?={ containsString(v.Recurrence.ByDay, wd) }
+									/>
+									{ weekdayShortLabel(wd) }
+								</label>
+							}
+						</div>
+					</div>
+					<div class="field mb-2" x-show="repeat === 'monthly'">
+						<span class="is-size-7 has-text-weight-semibold">Monthly</span>
+						<div class="control" style="margin-top: 0.25rem">
+							<label class="radio is-size-7 is-block" style="line-height: 1.9">
+								<input type="radio" name="monthly_mode" value="day" x-model="monthlyMode"/>
+								On day
+								<input
+									type="number"
+									name="bymonthday"
+									min="1"
+									max="31"
+									value={ strconv.Itoa(recByMonthDay(v.Recurrence, v.Ev)) }
+									class="input is-small"
+									style="width: 4.5rem"
+									x-show="monthlyMode === 'day'"
+								/>
+							</label>
+							<label class="radio is-size-7 is-block" style="line-height: 1.9">
+								<input type="radio" name="monthly_mode" value="nth" x-model="monthlyMode"/>
+								On the
+								<span x-show="monthlyMode === 'nth'" style="display: none" class="is-inline-flex" >
+									<span class="select is-small">
+										<select name="nth">
+											<option value="1" selected?={ v.Recurrence.Nth == 1 }>1st</option>
+											<option value="2" selected?={ v.Recurrence.Nth == 2 }>2nd</option>
+											<option value="3" selected?={ v.Recurrence.Nth == 3 }>3rd</option>
+											<option value="4" selected?={ v.Recurrence.Nth == 4 }>4th</option>
+											<option value="5" selected?={ v.Recurrence.Nth == 5 }>5th</option>
+										</select>
+									</span>
+									<span class="select is-small">
+										<select name="nth_weekday">
+											for _, wd := range []string{"MO", "TU", "WE", "TH", "FR", "SA", "SU"} {
+												<option value={ wd } selected?={ v.Recurrence.NthWeekday == wd }>{ weekdayShortLabel(wd) }</option>
+											}
+										</select>
+									</span>
+								</span>
+								<span x-show="monthlyMode !== 'nth'">…</span>
+							</label>
+						</div>
+					</div>
+					<div class="field mb-3">
+						<span class="is-size-7 has-text-weight-semibold">Ends</span>
+						<div class="is-flex is-align-items-center" style="gap: 0.5rem; flex-wrap: wrap; margin-top: 0.25rem">
+							<div class="select is-small">
+								<select name="end" x-model="end">
+									<option value="never">Never</option>
+									<option value="until">On date</option>
+									<option value="count">After</option>
+								</select>
+							</div>
+							<input
+								type="date"
+								name="until"
+								value={ v.Recurrence.Until }
+								class="input is-small"
+								style="width: 10rem"
+								x-show="end === 'until'"
+							/>
+							<span x-show="end === 'count'" style="display: none" class="is-inline-flex is-align-items-center" >
+								<input
+									type="number"
+									name="count"
+									min="1"
+									value={ strconv.Itoa(recCount(v.Recurrence)) }
+									class="input is-small"
+									style="width: 4.5rem"
+								/>
+								<span class="is-size-7">occurrences</span>
+							</span>
+						</div>
+					</div>
+				</div>
+			</div>
 			<div class="is-flex is-align-items-center" style="gap: 0.5rem">
 				<button type="submit" class="button is-primary is-small">
-					if ev != nil {
+					if v.EventID != "" {
 						Save
 					} else {
 						Add Event
 					}
 				</button>
-				if ev != nil && ev.ID != "" {
-					<button
-						type="button"
-						data-cal-id={ calID }
-						hx-delete={ fmt.Sprintf("/admin/fragments/calendars/%s/events/%s", calID, ev.ID) }
-						hx-swap="none"
-						hx-on:htmx:after-request="if(event.detail.successful){ document.getElementById('event-form-area').innerHTML=''; htmx.ajax('GET', '/admin/fragments/calendars/'+this.dataset.calId+'/grid', {target: '#cal-grid-section', swap: 'outerHTML'}) }"
-						class="button is-danger is-small is-outlined"
-					>Delete</button>
-				}
 				<button
 					type="button"
 					x-on:click="document.getElementById('event-form-area').innerHTML=''"
@@ -629,7 +943,87 @@ templ EventForm(calID string, ev *store.CalendarEvent, errMsg string) {
 				>Cancel</button>
 			</div>
 		</form>
+		if v.EventID != "" {
+			<div class="mt-3 pt-3" style="border-top: 1px solid var(--bulma-border)">
+				<div class="is-flex is-align-items-center is-flex-wrap-wrap" style="gap: 0.5rem">
+					<button
+						type="button"
+						data-cal-id={ v.CalendarID }
+						hx-delete={ fmt.Sprintf("/admin/fragments/calendars/%s/events/%s", v.CalendarID, v.EventID) + deleteParams(v, "one") }
+						hx-swap="none"
+						hx-on:htmx:after-request="if(event.detail.successful){ document.getElementById('event-form-area').innerHTML=''; htmx.ajax('GET', '/admin/fragments/calendars/'+this.dataset.calId+'/grid', {target: '#cal-grid-section', swap: 'outerHTML'}) }"
+						class="button is-danger is-small is-outlined"
+					>
+						if v.IsRecurring {
+							Delete this event
+						} else {
+							Delete
+						}
+					</button>
+					if v.IsRecurring {
+						<button
+							type="button"
+							data-cal-id={ v.CalendarID }
+							hx-delete={ fmt.Sprintf("/admin/fragments/calendars/%s/events/%s", v.CalendarID, v.EventID) + deleteParams(v, "following") }
+							hx-swap="none"
+							hx-on:htmx:after-request="if(event.detail.successful){ document.getElementById('event-form-area').innerHTML=''; htmx.ajax('GET', '/admin/fragments/calendars/'+this.dataset.calId+'/grid', {target: '#cal-grid-section', swap: 'outerHTML'}) }"
+							class="button is-danger is-small is-outlined"
+						>Delete this and following</button>
+						<button
+							type="button"
+							data-cal-id={ v.CalendarID }
+							hx-delete={ fmt.Sprintf("/admin/fragments/calendars/%s/events/%s", v.CalendarID, v.EventID) + deleteParams(v, "all") }
+							hx-swap="none"
+							hx-on:htmx:after-request="if(event.detail.successful){ document.getElementById('event-form-area').innerHTML=''; htmx.ajax('GET', '/admin/fragments/calendars/'+this.dataset.calId+'/grid', {target: '#cal-grid-section', swap: 'outerHTML'}) }"
+							class="button is-danger is-small"
+						>Delete all events</button>
+					}
+				</div>
+			</div>
+		}
 	</div>
+}
+
+// deleteParams builds the query string carrying delete scope and occurrence.
+func deleteParams(v EventFormView, scope string) string {
+	if !v.IsRecurring {
+		return ""
+	}
+	p := "?scope=" + scope
+	if v.Occurrence != "" {
+		p += "&occurrence=" + v.Occurrence
+	}
+	return p
+}
+
+func weekdayShortLabel(code string) string {
+	return map[string]string{
+		"MO": "Mon", "TU": "Tue", "WE": "Wed", "TH": "Thu", "FR": "Fri", "SA": "Sat", "SU": "Sun",
+	}[code]
+}
+
+func recInterval(st store.RecurrenceState) int {
+	if st.Interval < 1 {
+		return 1
+	}
+	return st.Interval
+}
+
+func recByMonthDay(st store.RecurrenceState, ev *store.CalendarEvent) int {
+	if st.ByMonthDay > 0 {
+		return st.ByMonthDay
+	}
+	if ev != nil {
+		return ev.StartTime.Day()
+	}
+	return 1
+}
+
+func recCount(st store.RecurrenceState) int {
+	if st.Count > 0 {
+		return st.Count
+	}
+	return 5
 }
 
 func evTitle(ev *store.CalendarEvent) string {
@@ -671,14 +1065,22 @@ func calTimezone(cal *store.Calendar) *time.Location {
 	return loc
 }
 
-func eventsOnDate(events []store.CalendarEvent, dateID string, loc *time.Location) []store.CalendarEvent {
-	var result []store.CalendarEvent
+func eventsOnDate(events []store.EventOccurrence, dateID string, loc *time.Location) []store.EventOccurrence {
+	var result []store.EventOccurrence
 	for _, ev := range events {
 		if ev.StartTime.In(loc).Format("2006-01-02") == dateID {
 			result = append(result, ev)
 		}
 	}
 	return result
+}
+
+// occQuery returns the occurrence addressing parameter for a recurring chip.
+func occQuery(ev store.EventOccurrence) string {
+	if !ev.IsRecurring {
+		return ""
+	}
+	return "?occurrence=" + ev.OccurrenceStart.UTC().Format(time.RFC3339)
 }
 
 func monthLabel(year, month int) string {

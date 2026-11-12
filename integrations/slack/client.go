@@ -37,6 +37,10 @@ const (
 	ActionCalendarShowList    = "calendar_show_list"    // opens event list modal; value = calendarID
 	ActionCalendarEventEdit   = "calendar_event_edit"   // push edit modal; value = eventID
 	ActionCalendarEventDelete = "calendar_event_delete" // delete event; value = eventID
+
+	// My Calendar — the user's personal composite view.
+	ActionCreateMyCalendar = "create_my_calendar" // opens My Calendar modal when none exists
+	ActionEditMyCalendar   = "edit_my_calendar"   // opens My Calendar modal pre-checked
 )
 
 // Modal callback IDs.
@@ -57,6 +61,9 @@ const (
 	ModalIDCalendarCreateEvent = "calendar_create_event"
 	ModalIDCalendarEventList   = "calendar_event_list"
 	ModalIDCalendarEditEvent   = "calendar_edit_event"
+
+	// My Calendar modal callback ID.
+	ModalIDMyCalendar = "my_calendar"
 )
 
 // ActionScheduleMeeting opens the schedule meeting modal from App Home.
