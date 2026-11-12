@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -37,6 +38,58 @@ func ListUpcomingEvents(pool *pgxpool.Pool) http.HandlerFunc {
 
 var slugRE = regexp.MustCompile(`^[a-z0-9-]+$`)
 
+// calendarRequest wraps store.Calendar with composite membership, which is not part
+// of the calendar row itself.
+type calendarRequest struct {
+	store.Calendar
+	MemberIDs []string `json:"member_ids"`
+}
+
+// normalizeCalendarKind validates the requested kind. Personal calendars are created
+// from Slack App Home only, never via the REST API.
+func normalizeCalendarKind(kind string) (string, string) {
+	switch kind {
+	case "":
+		return store.CalendarKindStandard, ""
+	case store.CalendarKindStandard, store.CalendarKindComposite:
+		return kind, ""
+	default:
+		return "", "kind must be standard or composite"
+	}
+}
+
+func validateCompositeRequest(cal *store.Calendar, memberIDs []string) string {
+	if cal.Kind != store.CalendarKindComposite {
+		if len(memberIDs) > 0 {
+			return "member_ids are only valid for composite calendars"
+		}
+		return ""
+	}
+	if cal.IcalURL != nil && *cal.IcalURL != "" {
+		return "composite calendars cannot have an iCal URL"
+	}
+	if len(memberIDs) == 0 {
+		return "composite calendars need at least one member"
+	}
+	return ""
+}
+
+// membershipError maps store membership errors to HTTP responses. Returns false when
+// err is nil or not a membership error.
+func membershipError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, store.ErrNotComposite),
+		errors.Is(err, store.ErrInvalidMember),
+		errors.Is(err, store.ErrCycleDetected):
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		return true
+	case errors.Is(err, store.ErrNotFound):
+		httpx.WriteError(w, http.StatusNotFound, "calendar not found")
+		return true
+	}
+	return false
+}
+
 // ListCalendars handles GET /api/calendars.
 func ListCalendars(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -49,71 +102,122 @@ func ListCalendars(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-// CreateCalendar handles POST /api/calendars.
+// CreateCalendar handles POST /api/calendars. Accepts kind (standard|composite)
+// and member_ids for composites.
 func CreateCalendar(pool *pgxpool.Pool, encKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		var cal store.Calendar
-		if err := json.NewDecoder(r.Body).Decode(&cal); err != nil {
+		var req calendarRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		if cal.Name == "" || cal.Slug == "" {
+		if req.Name == "" || req.Slug == "" {
 			httpx.WriteError(w, http.StatusBadRequest, "name and slug are required")
 			return
 		}
-		if !slugRE.MatchString(cal.Slug) {
+		if !slugRE.MatchString(req.Slug) {
 			httpx.WriteError(w, http.StatusBadRequest, "slug must contain only lowercase letters, digits, and hyphens")
 			return
 		}
-		if cal.Timezone == "" {
-			cal.Timezone = util.DefaultTimezone(ctx, pool, encKey)
+		kind, kindErr := normalizeCalendarKind(req.Kind)
+		if kindErr != "" {
+			httpx.WriteError(w, http.StatusBadRequest, kindErr)
+			return
+		}
+		req.Kind = kind
+		if msg := validateCompositeRequest(&req.Calendar, req.MemberIDs); msg != "" {
+			httpx.WriteError(w, http.StatusBadRequest, msg)
+			return
+		}
+		if req.Timezone == "" {
+			req.Timezone = util.DefaultTimezone(ctx, pool, encKey)
 		}
 
-		if err := store.CreateCalendar(ctx, pool, &cal); err != nil {
+		if err := store.CreateCalendar(ctx, pool, &req.Calendar); err != nil {
 			httpx.WriteError(w, http.StatusInternalServerError, "failed to create calendar")
 			return
 		}
+		if req.Kind == store.CalendarKindComposite {
+			if err := store.AddCalendarMembers(ctx, pool, req.ID, req.MemberIDs); err != nil {
+				store.DeleteCalendar(ctx, pool, req.ID) // roll back the orphan row
+				if membershipError(w, err) {
+					return
+				}
+				httpx.WriteError(w, http.StatusInternalServerError, "failed to add members")
+				return
+			}
+		}
 
-		store.LogAction(ctx, pool, nil, "calendar.created", cal.ID, map[string]string{
-			"name": cal.Name,
-			"slug": cal.Slug,
+		store.LogAction(ctx, pool, nil, "calendar.created", req.ID, map[string]string{
+			"name": req.Name,
+			"slug": req.Slug,
+			"kind": req.Kind,
 		})
 
-		httpx.WriteJSON(w, http.StatusCreated, cal)
+		httpx.WriteJSON(w, http.StatusCreated, req.Calendar)
 	}
 }
 
-// UpdateCalendar handles PUT /api/calendars/{id}.
+// UpdateCalendar handles PUT /api/calendars/{id}. Kind is immutable; member_ids
+// (on a composite) replace the full membership.
 func UpdateCalendar(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		id := r.PathValue("id")
 
-		var cal store.Calendar
-		if err := json.NewDecoder(r.Body).Decode(&cal); err != nil {
+		existing, err := store.GetCalendarByID(ctx, pool, id)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				httpx.WriteError(w, http.StatusNotFound, "calendar not found")
+				return
+			}
+			httpx.WriteError(w, http.StatusInternalServerError, "failed to load calendar")
+			return
+		}
+
+		var req calendarRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		if cal.Name == "" || cal.Slug == "" {
+		if req.Name == "" || req.Slug == "" {
 			httpx.WriteError(w, http.StatusBadRequest, "name and slug are required")
 			return
 		}
-		if !slugRE.MatchString(cal.Slug) {
+		if !slugRE.MatchString(req.Slug) {
 			httpx.WriteError(w, http.StatusBadRequest, "slug must contain only lowercase letters, digits, and hyphens")
 			return
 		}
-		cal.ID = id
+		if req.Kind != "" && req.Kind != existing.Kind {
+			httpx.WriteError(w, http.StatusBadRequest, "kind cannot be changed after creation")
+			return
+		}
+		req.Kind = existing.Kind
+		if msg := validateCompositeRequest(&req.Calendar, req.MemberIDs); msg != "" {
+			httpx.WriteError(w, http.StatusBadRequest, msg)
+			return
+		}
+		req.ID = id
 
-		if err := store.UpdateCalendar(ctx, pool, &cal); err != nil {
+		if err := store.UpdateCalendar(ctx, pool, &req.Calendar); err != nil {
 			httpx.WriteError(w, http.StatusInternalServerError, "failed to update calendar")
 			return
 		}
+		if req.Kind == store.CalendarKindComposite {
+			if err := store.ReplaceCalendarMembers(ctx, pool, id, req.MemberIDs); err != nil {
+				if membershipError(w, err) {
+					return
+				}
+				httpx.WriteError(w, http.StatusInternalServerError, "failed to update members")
+				return
+			}
+		}
 
 		store.LogAction(ctx, pool, nil, "calendar.updated", id, map[string]string{
-			"name": cal.Name,
-			"slug": cal.Slug,
+			"name": req.Name,
+			"slug": req.Slug,
 		})
 
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})

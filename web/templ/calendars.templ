@@ -28,7 +28,54 @@ func DerefStr(s *string) string {
 	return *s
 }
 
-templ CalendarsPage(calendars []store.Calendar, selectedCal *store.Calendar, year, month int, grid []CalGridCell, events []store.CalendarEvent) {
+// calReadOnly reports whether a calendar's events cannot be edited inline:
+// live-feed calendars, composites, and personal calendars are read-only views.
+func calReadOnly(cal *store.Calendar) bool {
+	if cal == nil {
+		return false
+	}
+	if cal.IcalURL != nil && *cal.IcalURL != "" {
+		return true
+	}
+	return cal.Kind == store.CalendarKindComposite || cal.Kind == store.CalendarKindPersonal
+}
+
+// calendarFormValues derives form field values from a calendar. cal == nil means
+// the create form.
+func calendarFormValues(cal *store.Calendar) (calID, name, slug, description, icalURL, timezone, displayOrder, color, kind string) {
+	if cal == nil {
+		return "", "", "", "", "", "", "0", "", store.CalendarKindStandard
+	}
+	order := "0"
+	if cal.DisplayOrder > 0 {
+		order = strconv.Itoa(cal.DisplayOrder)
+	}
+	return cal.ID, cal.Name, cal.Slug, DerefStr(cal.Description), DerefStr(cal.IcalURL), cal.Timezone, order, DerefStr(cal.Color), cal.Kind
+}
+
+// memberCandidates lists calendars selectable as composite members:
+// everything except the composite itself and other composites already being edited.
+func memberCandidates(all []store.Calendar, selfID string) []store.Calendar {
+	var out []store.Calendar
+	for _, cal := range all {
+		if cal.ID == selfID || cal.Kind == store.CalendarKindPersonal {
+			continue
+		}
+		out = append(out, cal)
+	}
+	return out
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+templ CalendarsPage(calendars []store.Calendar, selectedCal *store.Calendar, year, month int, grid []CalGridCell, events []store.CalendarEvent, membersByCal map[string][]string) {
 	@Layout("Calendars", "/admin/calendars") {
 		<div>
 			<div class="is-flex is-justify-content-space-between is-align-items-center mb-4">
@@ -64,7 +111,9 @@ templ CalendarsPage(calendars []store.Calendar, selectedCal *store.Calendar, yea
 										<a href={ templ.URL("/admin/calendars?cal=" + cal.ID) } class="is-block mb-2" style="text-decoration: none; color: inherit">
 											<p class="has-text-weight-semibold">{ cal.Name }</p>
 											<p class="is-family-monospace is-size-7 has-text-grey">/cal/{ cal.Slug }.ics · { cal.Timezone }</p>
-											if cal.IcalURL != nil && *cal.IcalURL != "" {
+											if cal.Kind == store.CalendarKindComposite {
+												<p class="is-size-7 has-text-primary mt-1">Composite</p>
+											} else if cal.IcalURL != nil && *cal.IcalURL != "" {
 												<p class="is-size-7 has-text-info mt-1">Live feed</p>
 											}
 										</a>
@@ -106,7 +155,7 @@ templ CalendarsPage(calendars []store.Calendar, selectedCal *store.Calendar, yea
 									<h2 class="subtitle is-5 mb-0">{ selectedCal.Name }</h2>
 									<span class="is-family-monospace is-size-7 has-text-grey">/cal/{ selectedCal.Slug }.ics</span>
 								</div>
-								if selectedCal.IcalURL == nil || *selectedCal.IcalURL == "" {
+								if !calReadOnly(selectedCal) {
 									<button
 										hx-get={ "/admin/fragments/calendars/" + selectedCal.ID + "/event-form" }
 										hx-target="#event-form-area"
@@ -115,15 +164,19 @@ templ CalendarsPage(calendars []store.Calendar, selectedCal *store.Calendar, yea
 									>Add event</button>
 								}
 							</div>
-							if selectedCal.IcalURL != nil && *selectedCal.IcalURL != "" {
+							if selectedCal.Kind == store.CalendarKindComposite {
+								<p class="is-size-7 has-text-grey mb-3">
+									This is a composite calendar — it shows events merged from its member calendars. Events can't be added here; edit them on their source calendar.
+								</p>
+							} else if selectedCal.IcalURL != nil && *selectedCal.IcalURL != "" {
 								<p class="is-size-7 has-text-grey mb-3">
 									This calendar uses a live feed — events are read-only. To manage events manually, use Edit &#8594; Import feed &amp; switch to manual. 
 									<em>This will prevent the calendar from being updated automatically going forward.</em>
 								</p>
 							}
 							<div id="event-form-area" class="mb-3"></div>
-							@CalendarGridSection(selectedCal.ID, year, month, grid, events, calTimezone(selectedCal), selectedCal.IcalURL != nil && *selectedCal.IcalURL != "")
-							if (selectedCal.IcalURL == nil || *selectedCal.IcalURL == "") && len(events) == 0 {
+							@CalendarGridSection(selectedCal.ID, year, month, grid, events, calTimezone(selectedCal), calReadOnly(selectedCal))
+							if !calReadOnly(selectedCal) && len(events) == 0 {
 								<p class="is-size-7 has-text-grey mt-2 has-text-centered">No events yet — click a day to add one.</p>
 							}
 						</div>
@@ -149,7 +202,7 @@ templ CalendarsPage(calendars []store.Calendar, selectedCal *store.Calendar, yea
 						aria-label="Close"
 					></button>
 				</div>
-				@calendarForm("", "", "", "", "", "", "0", "")
+				@calendarForm(nil, calendars, nil, "")
 			</div>
 		</dialog>
 		<!-- Per-calendar edit dialogs -->
@@ -167,7 +220,7 @@ templ CalendarsPage(calendars []store.Calendar, selectedCal *store.Calendar, yea
 							aria-label="Close"
 						></button>
 					</div>
-					@calendarForm(cal.ID, cal.Name, cal.Slug, DerefStr(cal.Description), DerefStr(cal.IcalURL), cal.Timezone, strconv.Itoa(cal.DisplayOrder), "")
+					@calendarForm(&cal, calendars, membersByCal[cal.ID], "")
 				</div>
 			</dialog>
 		}
@@ -181,7 +234,8 @@ func calSelectedRowClass(selected *store.Calendar, calID string) string {
 	return ""
 }
 
-templ calendarForm(calID, name, slug, description, icalURL, timezone, displayOrder string, errMsg string) {
+templ calendarForm(cal *store.Calendar, allCalendars []store.Calendar, memberIDs []string, errMsg string) {
+	{{ calID, name, slug, description, icalURL, timezone, displayOrder, color, kind := calendarFormValues(cal) }}
 	<form
 		if calID == "" {
 			hx-post="/admin/fragments/calendars/create"
@@ -190,8 +244,24 @@ templ calendarForm(calID, name, slug, description, icalURL, timezone, displayOrd
 		}
 		hx-swap="none"
 		hx-on:htmx:after-request="if(event.detail.successful){ const loc=event.detail.xhr.getResponseHeader('HX-Redirect'); if(loc) window.location.href=loc }"
+		x-data={ "{ kind: '" + kind + "' }" }
 	>
 		@AlertBox(errMsg, "error")
+		if cal == nil {
+			<div class="field mb-3">
+				<label for={ "cal-kind-" + calID } class="label is-small">Type</label>
+				<div class="control">
+					<div class="select is-small" style="width: 100%">
+						<select id={ "cal-kind-" + calID } name="kind" x-model="kind">
+							<option value="standard">Standard — manual events or a live iCal feed</option>
+							<option value="composite">Composite — merge multiple calendars into one</option>
+						</select>
+					</div>
+				</div>
+			</div>
+		} else {
+			<input type="hidden" name="kind" value={ kind }/>
+		}
 		<div class="field mb-3">
 			<label for={ "cal-name-" + calID } class="label is-small">Name <span class="has-text-danger" aria-hidden="true">*</span></label>
 			<div class="control">
@@ -234,7 +304,7 @@ templ calendarForm(calID, name, slug, description, icalURL, timezone, displayOrd
 					class="input is-small"
 				/>
 			</div>
-			<p class="help has-text-grey">All events — including those from an external iCal feed — are displayed in this timezone.</p>
+			<p class="help has-text-grey">All events — including those from member calendars or an external iCal feed — are displayed in this timezone.</p>
 		</div>
 		<div class="field mb-3">
 			<label for={ "cal-desc-" + calID } class="label is-small">Description</label>
@@ -249,19 +319,56 @@ templ calendarForm(calID, name, slug, description, icalURL, timezone, displayOrd
 				/>
 			</div>
 		</div>
+		<div x-show="kind === 'standard'">
+			<div class="field mb-3">
+				<label for={ "cal-ical-" + calID } class="label is-small">Live iCal Feed URL</label>
+				<div class="control">
+					<input
+						id={ "cal-ical-" + calID }
+						type="url"
+						name="ical_url"
+						value={ icalURL }
+						placeholder="https://calendar.google.com/…"
+						class="input is-small"
+					/>
+				</div>
+				<p class="help has-text-grey">If set, events are fetched live from this URL each time the calendar is displayed. Leave blank to manage events manually using the grid.</p>
+			</div>
+		</div>
+		<div x-show="kind === 'composite'">
+			<div class="field mb-3">
+				<label class="label is-small">Member Calendars <span class="has-text-danger" aria-hidden="true">*</span></label>
+				<div class="control">
+					for _, cand := range memberCandidates(allCalendars, calID) {
+						<label class="is-block" style="line-height: 1.9">
+							<input
+								type="checkbox"
+								name="members"
+								value={ cand.ID }
+								checked?={ containsString(memberIDs, cand.ID) }
+							/>
+							{ cand.Name }
+						</label>
+					}
+				</div>
+				<p class="help has-text-grey">Events from the selected calendars are merged into one view. Identical events (same title and time) are collapsed automatically.</p>
+			</div>
+		</div>
 		<div class="field mb-3">
-			<label for={ "cal-ical-" + calID } class="label is-small">Live iCal Feed URL</label>
+			<label for={ "cal-color-" + calID } class="label is-small">Color</label>
 			<div class="control">
 				<input
-					id={ "cal-ical-" + calID }
-					type="url"
-					name="ical_url"
-					value={ icalURL }
-					placeholder="https://calendar.google.com/…"
-					class="input is-small"
+					id={ "cal-color-" + calID }
+					type="text"
+					name="color"
+					value={ color }
+					placeholder="#3273dc"
+					pattern="^#[0-9a-fA-F]{6}$"
+					class="input is-small is-family-monospace"
+					style="max-width: 7rem"
 				/>
 			</div>
-			<p class="help has-text-grey">If set, events are fetched live from this URL each time the calendar is displayed. Leave blank to manage events manually using the grid.</p>
+			<p class="help has-text-grey">Optional hex color for event chips in list views.</p>
 		</div>
 		<div class="field mb-4">
 			<label for={ "cal-order-" + calID } class="label is-small">Display Order</label>
@@ -286,7 +393,7 @@ templ calendarForm(calID, name, slug, description, icalURL, timezone, displayOrd
 			}
 		</button>
 	</form>
-	if calID != "" && icalURL != "" {
+	if calID != "" && kind == store.CalendarKindStandard && icalURL != "" {
 		<div class="mt-4 pt-4" style="border-top: 1px solid var(--bulma-border)">
 			<p class="is-size-7 has-text-grey mb-2">Import all events from the live feed into the database and stop using the external URL. You can then manage events manually.</p>
 			<button

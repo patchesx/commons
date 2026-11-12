@@ -22,12 +22,12 @@ func (d Deps) CalendarsPage() http.HandlerFunc {
 		calID := r.URL.Query().Get("cal")
 		year, _ := strconv.Atoi(r.URL.Query().Get("year"))
 		month, _ := strconv.Atoi(r.URL.Query().Get("month"))
-		cals, sel, events, y, mo, grid, err := loadCalendarsPageData(ctx, d.Pool, calID, year, month)
+		cals, sel, events, y, mo, grid, membersByCal, err := loadCalendarsPageData(ctx, d.Pool, calID, year, month)
 		if err != nil {
 			http.Error(w, "failed to load calendars", http.StatusInternalServerError)
 			return
 		}
-		admintempl.CalendarsPage(cals, sel, y, mo, grid, events).Render(ctx, w)
+		admintempl.CalendarsPage(cals, sel, y, mo, grid, events, membersByCal).Render(ctx, w)
 	}
 }
 
@@ -38,20 +38,30 @@ func (d Deps) CalendarsCreate() http.HandlerFunc {
 			FragmentError(w, r, "bad request")
 			return
 		}
+		kind := r.FormValue("kind")
+		if kind == "" {
+			kind = store.CalendarKindStandard
+		}
+		if kind != store.CalendarKindStandard && kind != store.CalendarKindComposite {
+			FragmentError(w, r, "invalid calendar type")
+			return
+		}
 		cal := store.Calendar{
 			Name:     r.FormValue("name"),
 			Slug:     r.FormValue("slug"),
 			Timezone: r.FormValue("timezone"),
+			Kind:     kind,
 		}
 		if desc := r.FormValue("description"); desc != "" {
 			cal.Description = &desc
 		}
-		if icalURL := r.FormValue("ical_url"); icalURL != "" {
-			cal.IcalURL = &icalURL
+		if color := r.FormValue("color"); color != "" {
+			cal.Color = &color
 		}
 		if v, err := strconv.Atoi(r.FormValue("display_order")); err == nil && v >= 0 {
 			cal.DisplayOrder = v
 		}
+		members := r.Form["members"]
 		if cal.Name == "" || cal.Slug == "" {
 			FragmentError(w, r, "name and slug required")
 			return
@@ -59,8 +69,28 @@ func (d Deps) CalendarsCreate() http.HandlerFunc {
 		if cal.Timezone == "" {
 			cal.Timezone = util.DefaultTimezone(ctx, d.Pool, d.EncKey)
 		}
+		if kind == store.CalendarKindComposite {
+			// Composites never carry a feed URL — a stale form value is ignored, not an error.
+			cal.IcalURL = nil
+			if len(members) == 0 {
+				FragmentError(w, r, "composite calendars need at least one member calendar")
+				return
+			}
+		} else if icalURL := r.FormValue("ical_url"); icalURL != "" {
+			cal.IcalURL = &icalURL
+		}
 		if err := store.CreateCalendar(ctx, d.Pool, &cal); err != nil {
 			FragmentError(w, r, "failed to create calendar: "+err.Error())
+			return
+		}
+		if kind == store.CalendarKindComposite {
+			if err := store.AddCalendarMembers(ctx, d.Pool, cal.ID, members); err != nil {
+				store.DeleteCalendar(ctx, d.Pool, cal.ID) // roll back the orphan row
+				FragmentError(w, r, "failed to add members: "+err.Error())
+				return
+			}
+			w.Header().Set("HX-Redirect", "/admin/calendars?cal="+cal.ID)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		importedCount := 0
@@ -87,17 +117,23 @@ func (d Deps) CalendarsUpdate() http.HandlerFunc {
 			FragmentError(w, r, "bad request")
 			return
 		}
+		existing, err := store.GetCalendarByID(ctx, d.Pool, id)
+		if err != nil {
+			FragmentError(w, r, "calendar not found")
+			return
+		}
 		cal := store.Calendar{
 			ID:       id,
 			Name:     r.FormValue("name"),
 			Slug:     r.FormValue("slug"),
 			Timezone: r.FormValue("timezone"),
+			Kind:     existing.Kind, // kind is immutable; store ignores it on update anyway
 		}
 		if desc := r.FormValue("description"); desc != "" {
 			cal.Description = &desc
 		}
-		if icalURL := r.FormValue("ical_url"); icalURL != "" {
-			cal.IcalURL = &icalURL
+		if color := r.FormValue("color"); color != "" {
+			cal.Color = &color
 		}
 		if v, err := strconv.Atoi(r.FormValue("display_order")); err == nil && v >= 0 {
 			cal.DisplayOrder = v
@@ -105,9 +141,20 @@ func (d Deps) CalendarsUpdate() http.HandlerFunc {
 		if cal.Timezone == "" {
 			cal.Timezone = util.DefaultTimezone(ctx, d.Pool, d.EncKey)
 		}
+		if existing.Kind == store.CalendarKindComposite {
+			cal.IcalURL = nil // composites never carry a feed URL
+		} else if icalURL := r.FormValue("ical_url"); icalURL != "" {
+			cal.IcalURL = &icalURL
+		}
 		if err := store.UpdateCalendar(ctx, d.Pool, &cal); err != nil {
 			FragmentError(w, r, "failed to update calendar: "+err.Error())
 			return
+		}
+		if existing.Kind == store.CalendarKindComposite {
+			if err := store.ReplaceCalendarMembers(ctx, d.Pool, id, r.Form["members"]); err != nil {
+				FragmentError(w, r, "failed to update members: "+err.Error())
+				return
+			}
 		}
 		w.Header().Set("HX-Redirect", "/admin/calendars?cal="+id)
 		w.WriteHeader(http.StatusNoContent)
@@ -157,6 +204,35 @@ func (d Deps) CalendarsConvertToManual() http.HandlerFunc {
 	}
 }
 
+// adminICSFetcher adapts api.FetchICSEvents to the store.ICSFetcher signature.
+func adminICSFetcher(ctx context.Context, url string) ([]store.CalendarEvent, error) {
+	return api.FetchICSEvents(url)
+}
+
+// loadCalendarEvents returns the events to display for a calendar: merged member
+// events for composites/personal, live feed events for syndicated calendars,
+// stored events for manual ones.
+func loadCalendarEvents(ctx context.Context, pool *pgxpool.Pool, cal *store.Calendar) ([]store.CalendarEvent, error) {
+	if cal.Kind == store.CalendarKindComposite || cal.Kind == store.CalendarKindPersonal {
+		return store.ListCompositeEvents(ctx, pool, cal.ID, adminICSFetcher)
+	}
+	if cal.IcalURL != nil && *cal.IcalURL != "" {
+		return api.FetchICSEvents(*cal.IcalURL)
+	}
+	return store.ListCalendarEvents(ctx, pool, cal.ID)
+}
+
+// calendarIsReadOnly mirrors templ's calReadOnly for handler-side decisions.
+func calendarIsReadOnly(cal *store.Calendar) bool {
+	if cal == nil {
+		return false
+	}
+	if cal.IcalURL != nil && *cal.IcalURL != "" {
+		return true
+	}
+	return cal.Kind == store.CalendarKindComposite || cal.Kind == store.CalendarKindPersonal
+}
+
 func (d Deps) CalendarsGrid() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -170,17 +246,20 @@ func (d Deps) CalendarsGrid() http.HandlerFunc {
 		if month < 1 || month > 12 {
 			month = int(now.Month())
 		}
-		events, err := store.ListCalendarEvents(ctx, d.Pool, calID)
+		cal, err := store.GetCalendarByID(ctx, d.Pool, calID)
+		if err != nil {
+			FragmentError(w, r, "calendar not found")
+			return
+		}
+		events, err := loadCalendarEvents(ctx, d.Pool, cal)
 		if err != nil {
 			FragmentError(w, r, "failed to load events")
 			return
 		}
 		grid := buildCalGrid(year, month)
 		calLoc := calendarLocation(ctx, d.Pool, calID)
-		cal, _ := store.GetCalendarByID(ctx, d.Pool, calID)
-		readOnly := cal != nil && cal.IcalURL != nil && *cal.IcalURL != ""
 		w.Header().Set("Content-Type", "text/html")
-		admintempl.CalendarGridSection(calID, year, month, grid, events, calLoc, readOnly).Render(ctx, w)
+		admintempl.CalendarGridSection(calID, year, month, grid, events, calLoc, calendarIsReadOnly(cal)).Render(ctx, w)
 	}
 }
 
@@ -291,7 +370,7 @@ func (d Deps) CalendarsEventDelete() http.HandlerFunc {
 	}
 }
 
-func loadCalendarsPageData(ctx context.Context, pool *pgxpool.Pool, calID string, year, month int) ([]store.Calendar, *store.Calendar, []store.CalendarEvent, int, int, []admintempl.CalGridCell, error) {
+func loadCalendarsPageData(ctx context.Context, pool *pgxpool.Pool, calID string, year, month int) ([]store.Calendar, *store.Calendar, []store.CalendarEvent, int, int, []admintempl.CalGridCell, map[string][]string, error) {
 	now := time.Now()
 	if year == 0 {
 		year = now.Year()
@@ -301,10 +380,26 @@ func loadCalendarsPageData(ctx context.Context, pool *pgxpool.Pool, calID string
 	}
 	calendars, err := store.ListCalendars(ctx, pool)
 	if err != nil {
-		return nil, nil, nil, year, month, nil, err
+		return nil, nil, nil, year, month, nil, nil, err
+	}
+	// Pre-check member IDs for every composite so the edit dialogs can render them.
+	membersByCal := map[string][]string{}
+	for _, cal := range calendars {
+		if cal.Kind != store.CalendarKindComposite {
+			continue
+		}
+		members, err := store.ListCalendarMembers(ctx, pool, cal.ID)
+		if err != nil {
+			return nil, nil, nil, year, month, nil, nil, err
+		}
+		ids := make([]string, 0, len(members))
+		for _, m := range members {
+			ids = append(ids, m.ID)
+		}
+		membersByCal[cal.ID] = ids
 	}
 	if calID == "" {
-		return calendars, nil, nil, year, month, nil, nil
+		return calendars, nil, nil, year, month, nil, membersByCal, nil
 	}
 	var selectedCal *store.Calendar
 	for i := range calendars {
@@ -314,20 +409,14 @@ func loadCalendarsPageData(ctx context.Context, pool *pgxpool.Pool, calID string
 		}
 	}
 	if selectedCal == nil {
-		return calendars, nil, nil, year, month, nil, nil
+		return calendars, nil, nil, year, month, nil, membersByCal, nil
 	}
-	var events []store.CalendarEvent
-	if selectedCal.IcalURL != nil && *selectedCal.IcalURL != "" {
-		events, _ = api.FetchICSEvents(*selectedCal.IcalURL)
-	} else {
-		var err error
-		events, err = store.ListCalendarEvents(ctx, pool, calID)
-		if err != nil {
-			return nil, nil, nil, year, month, nil, err
-		}
+	events, err := loadCalendarEvents(ctx, pool, selectedCal)
+	if err != nil {
+		return nil, nil, nil, year, month, nil, nil, err
 	}
 	grid := buildCalGrid(year, month)
-	return calendars, selectedCal, events, year, month, grid, nil
+	return calendars, selectedCal, events, year, month, grid, membersByCal, nil
 }
 
 func buildCalGrid(year, month int) []admintempl.CalGridCell {

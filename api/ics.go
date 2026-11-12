@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,8 +15,14 @@ import (
 	"commons/store"
 )
 
-// ServeICS handles GET /cal/{slug}.ics — public, no auth required.
+// icsStoreFetcher adapts FetchICSEvents to the store.ICSFetcher signature.
+func icsStoreFetcher(ctx context.Context, url string) ([]store.CalendarEvent, error) {
+	return FetchICSEvents(url)
+}
+
+// ServeICS handles GET /cal/{slug} — public, no auth required.
 // Generates and returns a valid iCalendar feed for the named calendar.
+// Composites serve their merged, deduplicated member events.
 func ServeICS(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -30,8 +37,19 @@ func ServeICS(pool *pgxpool.Pool) http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		if cal.Kind == store.CalendarKindPersonal {
+			// Personal calendars have no slug (NULL), so this is unreachable today —
+			// guarded explicitly in case slug assignment changes.
+			http.NotFound(w, r)
+			return
+		}
 
-		events, err := store.ListCalendarEvents(ctx, pool, cal.ID)
+		var events []store.CalendarEvent
+		if cal.Kind == store.CalendarKindComposite {
+			events, err = store.ListCompositeEvents(ctx, pool, cal.ID, icsStoreFetcher)
+		} else {
+			events, err = store.ListCalendarEvents(ctx, pool, cal.ID)
+		}
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return

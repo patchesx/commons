@@ -26,8 +26,8 @@ type calEvent struct {
 }
 
 // calendarBlocksForCalendar returns Slack blocks for the upcoming events section of a calendar.
-// If cal.IcalURL is set, events are fetched live from that URL.
-// If cal.IcalURL is nil, events are read from the calendar_events table.
+// Composites show their merged member events; syndicated calendars fetch their feed live;
+// manual calendars read from the calendar_events table.
 // Always returns at least a divider + title block; shows a "no events" notice when the list is empty.
 // If accessory is non-nil it is placed alongside the "Upcoming Events" title (e.g. a calendar-switcher dropdown).
 func calendarBlocksForCalendar(ctx context.Context, pool *pgxpool.Pool, cal store.Calendar, accessory slacklib.BlockElement) []slacklib.Block {
@@ -38,12 +38,18 @@ func calendarBlocksForCalendar(ctx context.Context, pool *pgxpool.Pool, cal stor
 
 	var events []calEvent
 	var fetchErr error
-	if cal.IcalURL != nil && *cal.IcalURL != "" {
+	switch {
+	case cal.Kind == store.CalendarKindComposite || cal.Kind == store.CalendarKindPersonal:
+		events, fetchErr = fetchCompositeEvents(ctx, pool, cal, loc)
+		if fetchErr != nil {
+			log.Printf("slack/apphome: composite events for calendar %s: %v", cal.ID, fetchErr)
+		}
+	case cal.IcalURL != nil && *cal.IcalURL != "":
 		events, fetchErr = fetchICalEvents(ctx, *cal.IcalURL, loc)
 		if fetchErr != nil {
 			log.Printf("slack/apphome: ical fetch for calendar %s: %v", cal.ID, fetchErr)
 		}
-	} else {
+	default:
 		events, fetchErr = fetchInternalEvents(ctx, pool, cal.ID)
 		if fetchErr != nil {
 			log.Printf("slack/apphome: internal events for calendar %s: %v", cal.ID, fetchErr)
@@ -196,6 +202,53 @@ func fetchICalEvents(ctx context.Context, calURL string, loc *time.Location) ([]
 		}
 	}
 
+	sort.Slice(events, func(i, j int) bool { return events[i].Start.Before(events[j].Start) })
+	return events, nil
+}
+
+// fetchCompositeEvents returns the merged, deduplicated events of a composite (or
+// personal) calendar within the next 7 days, mirroring the window used by the other
+// fetchers. Feed members are fetched via fetchICalEvents; manual members come from
+// the calendar_events table.
+func fetchCompositeEvents(ctx context.Context, pool *pgxpool.Pool, cal store.Calendar, loc *time.Location) ([]calEvent, error) {
+	fetcher := func(ctx context.Context, url string) ([]store.CalendarEvent, error) {
+		evts, err := fetchICalEvents(ctx, url, loc)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]store.CalendarEvent, 0, len(evts))
+		for _, e := range evts {
+			evt := store.CalendarEvent{Title: e.Title, StartTime: e.Start, AllDay: e.AllDay}
+			if !e.End.IsZero() {
+				end := e.End
+				evt.EndTime = &end
+			}
+			out = append(out, evt)
+		}
+		return out, nil
+	}
+	merged, err := store.ListCompositeEvents(ctx, pool, cal.ID, fetcher)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	nowLocal := now.In(loc)
+	windowEnd := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day()+7, 23, 59, 59, 0, loc)
+	var events []calEvent
+	for _, e := range merged {
+		// Keep events that are upcoming or still ongoing; drop past ones.
+		upcoming := !e.StartTime.Before(now)
+		ongoing := e.EndTime != nil && e.EndTime.After(now)
+		if (!upcoming && !ongoing) || e.StartTime.After(windowEnd) {
+			continue
+		}
+		var end time.Time
+		if e.EndTime != nil {
+			end = *e.EndTime
+		}
+		events = append(events, calEvent{Title: e.Title, Start: e.StartTime, End: end, AllDay: e.AllDay})
+	}
 	sort.Slice(events, func(i, j int) bool { return events[i].Start.Before(events[j].Start) })
 	return events, nil
 }

@@ -158,7 +158,11 @@ func Publish(ctx context.Context, pool *pgxpool.Pool, encKey []byte, client *sla
 			}
 			blks = append(blks, calendarBlocksForCalendar(ctx, pool, *activeCal, calAccessory)...)
 
-			if activeCal.IcalURL == nil && hasPermission(perms, permissions.CalendarManage) {
+			// Manage buttons appear only on manual standard calendars — composites and
+			// personal calendars are merged views, live feeds are read-only.
+			calIsEditable := activeCal.IcalURL == nil &&
+				activeCal.Kind != store.CalendarKindComposite && activeCal.Kind != store.CalendarKindPersonal
+			if calIsEditable && hasPermission(perms, permissions.CalendarManage) {
 				addBtn := slacklib.NewButtonBlockElement(
 					ActionAddCalendarEvent, activeCal.ID,
 					slacklib.NewTextBlockObject(slacklib.PlainTextType, ":heavy_plus_sign: Add Event", true, false),

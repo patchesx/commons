@@ -17,8 +17,11 @@ type Calendar struct {
 	IcalURL      *string
 	Timezone     string
 	DisplayOrder int
+	Kind         string
+	Color        *string
 	CreatedBy    *string
 	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type CalendarEvent struct {
@@ -32,13 +35,16 @@ type CalendarEvent struct {
 	EndTime     *time.Time
 	AllDay      bool
 	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
-// ListCalendars returns all calendars ordered by display_order then name.
+// ListCalendars returns all non-personal calendars ordered by display_order then name.
+// Personal calendars are excluded — they render only for their owner in Slack App Home.
 func ListCalendars(ctx context.Context, pool *pgxpool.Pool) ([]Calendar, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, name, slug, description, ical_url, timezone, display_order, created_by, created_at
+		SELECT id, name, slug, description, ical_url, timezone, display_order, kind, color, created_by, created_at, updated_at
 		FROM calendars
+		WHERE kind <> 'personal'
 		ORDER BY display_order, name
 	`)
 	if err != nil {
@@ -52,10 +58,10 @@ func ListCalendars(ctx context.Context, pool *pgxpool.Pool) ([]Calendar, error) 
 func GetCalendarBySlug(ctx context.Context, pool *pgxpool.Pool, slug string) (*Calendar, error) {
 	c := &Calendar{}
 	err := pool.QueryRow(ctx, `
-		SELECT id, name, slug, description, ical_url, timezone, display_order, created_by, created_at
+		SELECT id, name, slug, description, ical_url, timezone, display_order, kind, color, created_by, created_at, updated_at
 		FROM calendars
 		WHERE slug = $1
-	`, slug).Scan(&c.ID, &c.Name, &c.Slug, &c.Description, &c.IcalURL, &c.Timezone, &c.DisplayOrder, &c.CreatedBy, &c.CreatedAt)
+	`, slug).Scan(&c.ID, &c.Name, &c.Slug, &c.Description, &c.IcalURL, &c.Timezone, &c.DisplayOrder, &c.Kind, &c.Color, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -69,10 +75,10 @@ func GetCalendarBySlug(ctx context.Context, pool *pgxpool.Pool, slug string) (*C
 func GetCalendarByID(ctx context.Context, pool *pgxpool.Pool, id string) (*Calendar, error) {
 	c := &Calendar{}
 	err := pool.QueryRow(ctx, `
-		SELECT id, name, slug, description, ical_url, timezone, display_order, created_by, created_at
+		SELECT id, name, slug, description, ical_url, timezone, display_order, kind, color, created_by, created_at, updated_at
 		FROM calendars
 		WHERE id = $1
-	`, id).Scan(&c.ID, &c.Name, &c.Slug, &c.Description, &c.IcalURL, &c.Timezone, &c.DisplayOrder, &c.CreatedBy, &c.CreatedAt)
+	`, id).Scan(&c.ID, &c.Name, &c.Slug, &c.Description, &c.IcalURL, &c.Timezone, &c.DisplayOrder, &c.Kind, &c.Color, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -82,23 +88,29 @@ func GetCalendarByID(ctx context.Context, pool *pgxpool.Pool, id string) (*Calen
 	return c, nil
 }
 
-// CreateCalendar inserts a new calendar and populates c.ID and c.CreatedAt.
+// CreateCalendar inserts a new calendar and populates c.ID, c.CreatedAt, and c.UpdatedAt.
+// An empty Kind defaults to standard.
 func CreateCalendar(ctx context.Context, pool *pgxpool.Pool, c *Calendar) error {
+	if c.Kind == "" {
+		c.Kind = CalendarKindStandard
+	}
 	return pool.QueryRow(ctx, `
-		INSERT INTO calendars (name, slug, description, ical_url, timezone, display_order, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, created_at
-	`, c.Name, c.Slug, c.Description, c.IcalURL, c.Timezone, c.DisplayOrder, c.CreatedBy,
-	).Scan(&c.ID, &c.CreatedAt)
+		INSERT INTO calendars (name, slug, description, ical_url, timezone, display_order, kind, color, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, created_at, updated_at
+	`, c.Name, c.Slug, c.Description, c.IcalURL, c.Timezone, c.DisplayOrder, c.Kind, c.Color, c.CreatedBy,
+	).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt)
 }
 
-// UpdateCalendar updates name, slug, description, ical_url, and timezone for an existing calendar.
+// UpdateCalendar updates name, slug, description, ical_url, timezone, display_order, and color
+// for an existing calendar. Kind is immutable after creation and is not updated.
 func UpdateCalendar(ctx context.Context, pool *pgxpool.Pool, c *Calendar) error {
 	_, err := pool.Exec(ctx, `
 		UPDATE calendars
-		SET name = $1, slug = $2, description = $3, ical_url = $4, timezone = $5, display_order = $6
-		WHERE id = $7
-	`, c.Name, c.Slug, c.Description, c.IcalURL, c.Timezone, c.DisplayOrder, c.ID)
+		SET name = $1, slug = $2, description = $3, ical_url = $4, timezone = $5, display_order = $6,
+		    color = $7, updated_at = NOW()
+		WHERE id = $8
+	`, c.Name, c.Slug, c.Description, c.IcalURL, c.Timezone, c.DisplayOrder, c.Color, c.ID)
 	return err
 }
 
@@ -134,12 +146,12 @@ func ListUpcomingCalendarEvents(ctx context.Context, pool *pgxpool.Pool, limit i
 	)
 	if limit > 0 {
 		rows, err = pool.Query(ctx, `
-			SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at
+			SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at, updated_at
 			FROM calendar_events WHERE start_time >= NOW() ORDER BY start_time LIMIT $1
 		`, limit)
 	} else {
 		rows, err = pool.Query(ctx, `
-			SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at
+			SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at, updated_at
 			FROM calendar_events WHERE start_time >= NOW() ORDER BY start_time
 		`)
 	}
@@ -159,7 +171,7 @@ func ListUpcomingEventsForCalendar(ctx context.Context, pool *pgxpool.Pool, cale
 	)
 	if withinDays > 0 {
 		rows, err = pool.Query(ctx, `
-			SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at
+			SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at, updated_at
 			FROM calendar_events
 			WHERE calendar_id = $1
 			  AND start_time >= NOW()
@@ -168,7 +180,7 @@ func ListUpcomingEventsForCalendar(ctx context.Context, pool *pgxpool.Pool, cale
 		`, calendarID, withinDays)
 	} else {
 		rows, err = pool.Query(ctx, `
-			SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at
+			SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at, updated_at
 			FROM calendar_events
 			WHERE calendar_id = $1 AND start_time >= NOW()
 			ORDER BY start_time
@@ -184,7 +196,7 @@ func ListUpcomingEventsForCalendar(ctx context.Context, pool *pgxpool.Pool, cale
 // ListCalendarEvents returns all events for a calendar ordered by start_time ascending.
 func ListCalendarEvents(ctx context.Context, pool *pgxpool.Pool, calendarID string) ([]CalendarEvent, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at
+		SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at, updated_at
 		FROM calendar_events
 		WHERE calendar_id = $1
 		ORDER BY start_time
@@ -196,14 +208,23 @@ func ListCalendarEvents(ctx context.Context, pool *pgxpool.Pool, calendarID stri
 	return scanCalendarEvents(rows)
 }
 
-// CreateCalendarEvent inserts a new event and populates e.ID and e.CreatedAt.
+// CreateCalendarEvent inserts a new event and populates e.ID, e.CreatedAt, and e.UpdatedAt.
+// Returns ErrNotEditable when the target calendar is a composite or personal calendar —
+// those render only merged member events and never store their own.
 func CreateCalendarEvent(ctx context.Context, pool *pgxpool.Pool, e *CalendarEvent) error {
+	var kind string
+	if err := pool.QueryRow(ctx, `SELECT kind FROM calendars WHERE id = $1`, e.CalendarID).Scan(&kind); err != nil {
+		return err
+	}
+	if kind == CalendarKindComposite || kind == CalendarKindPersonal {
+		return ErrNotEditable
+	}
 	return pool.QueryRow(ctx, `
 		INSERT INTO calendar_events (calendar_id, title, description, location, url, start_time, end_time, all_day)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, created_at
+		RETURNING id, created_at, updated_at
 	`, e.CalendarID, e.Title, e.Description, e.Location, e.URL, e.StartTime, e.EndTime, e.AllDay,
-	).Scan(&e.ID, &e.CreatedAt)
+	).Scan(&e.ID, &e.CreatedAt, &e.UpdatedAt)
 }
 
 // GetCalendarEventByID returns a single calendar event by its UUID. Returns ErrNotFound if absent.
@@ -211,10 +232,10 @@ func GetCalendarEventByID(ctx context.Context, pool *pgxpool.Pool, id string) (*
 	e := &CalendarEvent{}
 	err := pool.QueryRow(ctx, `
 		SELECT id, calendar_id, title, description, location, url,
-		       start_time, end_time, all_day, created_at
+		       start_time, end_time, all_day, created_at, updated_at
 		FROM calendar_events WHERE id = $1
 	`, id).Scan(&e.ID, &e.CalendarID, &e.Title, &e.Description, &e.Location, &e.URL,
-		&e.StartTime, &e.EndTime, &e.AllDay, &e.CreatedAt)
+		&e.StartTime, &e.EndTime, &e.AllDay, &e.CreatedAt, &e.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -229,7 +250,7 @@ func UpdateCalendarEvent(ctx context.Context, pool *pgxpool.Pool, e *CalendarEve
 	_, err := pool.Exec(ctx, `
 		UPDATE calendar_events
 		SET title = $1, description = $2, location = $3, url = $4,
-		    start_time = $5, end_time = $6, all_day = $7
+		    start_time = $5, end_time = $6, all_day = $7, updated_at = NOW()
 		WHERE id = $8
 	`, e.Title, e.Description, e.Location, e.URL, e.StartTime, e.EndTime, e.AllDay, e.ID)
 	return err
@@ -269,7 +290,7 @@ func scanCalendars(rows interface {
 	var calendars []Calendar
 	for rows.Next() {
 		var c Calendar
-		if err := rows.Scan(&c.ID, &c.Name, &c.Slug, &c.Description, &c.IcalURL, &c.Timezone, &c.DisplayOrder, &c.CreatedBy, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Slug, &c.Description, &c.IcalURL, &c.Timezone, &c.DisplayOrder, &c.Kind, &c.Color, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		calendars = append(calendars, c)
@@ -286,7 +307,7 @@ func scanCalendarEvents(rows interface {
 	for rows.Next() {
 		var e CalendarEvent
 		if err := rows.Scan(&e.ID, &e.CalendarID, &e.Title, &e.Description, &e.Location, &e.URL,
-			&e.StartTime, &e.EndTime, &e.AllDay, &e.CreatedAt); err != nil {
+			&e.StartTime, &e.EndTime, &e.AllDay, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return nil, err
 		}
 		events = append(events, e)
