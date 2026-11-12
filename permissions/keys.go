@@ -26,5 +26,8 @@ const (
 	WorkItemsCreate         = "work_items.create"
 	LibraryView             = "library.view"
 	LibraryManage           = "library.manage"
+	InventoryView           = "inventory.view"
+	InventoryManage         = "inventory.manage"
+	InventoryAdmin          = "inventory.admin"
 	AdminAccess             = "admin.access"
 )
