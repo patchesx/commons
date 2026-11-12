@@ -33,3 +33,4 @@ ai/*
 .claude/settings.local.json
 adminapp.exe
 .worktrees/
+*/worktrees/
