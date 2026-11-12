@@ -9,7 +9,7 @@ import (
 type HomePageData struct {
 	DisplayName  string
 	QuickLinks   []store.QuickLink
-	Events       []store.CalendarEvent
+	Events       []store.EventOccurrence
 	Announcement string
 	Permissions  []string
 	UnreadCount  int
@@ -141,21 +141,13 @@ templ HomePage(data HomePageData) {
 	}
 }
 
-templ CalendarEventsFragment(events []store.CalendarEvent) {
+templ CalendarEventsFragment(events []store.EventOccurrence, colors map[string]string, loc *time.Location) {
 	<div>
 		<p class="has-text-weight-semibold mb-3">Upcoming Events — Next 14 Days</p>
 		if len(events) == 0 {
 			<p class="has-text-grey is-size-7">No upcoming events in the next 14 days.</p>
 		} else {
-			for _, ev := range events {
-				<div class="py-2" style="border-bottom: 1px solid var(--bulma-border)">
-					<p class="has-text-weight-semibold is-size-6">{ ev.Title }</p>
-					<p class="is-size-7 has-text-grey mt-1">{ homeFormatEvent(ev) }</p>
-					if ev.Location != nil && *ev.Location != "" {
-						<p class="is-size-7 has-text-grey">{ *ev.Location }</p>
-					}
-				</div>
-			}
+			@AgendaList(GroupByDay(events, loc), colors, true, "", true)
 		}
 	</div>
 }
@@ -164,7 +156,7 @@ func homeToday() string {
 	return time.Now().Format("Monday, January 2")
 }
 
-func homeFormatEvent(ev store.CalendarEvent) string {
+func homeFormatEvent(ev store.EventOccurrence) string {
 	d := ev.StartTime.Format("Mon, Jan 2")
 	if ev.AllDay {
 		return d

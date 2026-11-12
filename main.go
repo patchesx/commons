@@ -23,6 +23,7 @@ import (
 	_ "commons/integrations/s3storage"
 	_ "commons/integrations/solidaritytech"
 	_ "commons/integrations/vimeo"
+	slackpkg "commons/integrations/slack"
 	ytpkg "commons/integrations/youtube"
 	_ "commons/integrations/zoom"
 
@@ -137,6 +138,16 @@ func main() {
 		fn:    func(ctx context.Context) error { return jobs.SendOverdueReminders(ctx, pool, pctx.Notifier()) },
 	})
 	plugin.RegisterActionType(&callbackAction{
+		id:    "jobs.calendar_feed_sync",
+		label: "Sync Calendar Feeds",
+		fn:    func(ctx context.Context) error { jobs.SyncCalendarFeeds(ctx, pool); return nil },
+	})
+	plugin.RegisterActionType(&callbackAction{
+		id:    "jobs.calendar_reminders",
+		label: "Send Calendar Reminders",
+		fn:    func(ctx context.Context) error { slackpkg.SendCalendarReminders(ctx, pool, cfg.EncryptionKey); return nil },
+	})
+	plugin.RegisterActionType(&callbackAction{
 		id:    "legislation.sync",
 		label: "Legislation Sync",
 		fn:    func(ctx context.Context) error { legislation.Sync(ctx, pool, cfg.EncryptionKey, pctx.Notifier()); return nil },
@@ -151,6 +162,8 @@ func main() {
 	// Seed managed scheduled triggers for platform-agnostic jobs (replaces RegisterScheduledJob).
 	seedManagedTrigger(pool, "jobs", "Meeting Reminders", "1m", "jobs.meeting_reminders")
 	seedManagedTrigger(pool, "jobs", "Library Overdue Reminders", "1m", "jobs.library_overdue")
+	seedManagedTrigger(pool, "jobs", "Calendar Feed Sync", "30m", "jobs.calendar_feed_sync")
+	seedManagedTrigger(pool, "jobs", "Calendar Reminders", "1m", "jobs.calendar_reminders")
 
 	// Start the scheduled trigger runner (fires scheduled trigger pipelines).
 	go scheduler.Run(context.Background(), pool, cfg.EncryptionKey, pctx)
@@ -235,7 +248,10 @@ func main() {
 	mux.Handle("PATCH /admin/fragments/calendars/{id}", webAuth(admin.CalendarsUpdate()))
 	mux.Handle("DELETE /admin/fragments/calendars/{id}", webAuth(admin.CalendarsDelete()))
 	mux.Handle("POST /admin/fragments/calendars/{id}/convert-to-manual", webAuth(admin.CalendarsConvertToManual()))
+	mux.Handle("POST /admin/fragments/calendars/{id}/sync-now", webAuth(admin.CalendarsSyncNow()))
+	mux.Handle("POST /admin/fragments/calendars/{id}/reminders", webAuth(admin.CalendarsSaveReminders()))
 	mux.Handle("GET /admin/fragments/calendars/{calId}/grid", webAuth(admin.CalendarsGrid()))
+	mux.Handle("GET /admin/fragments/calendars/{calId}/agenda", webAuth(admin.CalendarsAgenda()))
 	mux.Handle("GET /admin/fragments/calendars/{calId}/event-form", webAuth(admin.CalendarsEventForm()))
 	mux.Handle("GET /admin/fragments/calendars/{calId}/events/{eventId}/form", webAuth(admin.CalendarsEventEditForm()))
 	mux.Handle("POST /admin/fragments/calendars/{calId}/events", webAuth(admin.CalendarsEventCreate()))
@@ -471,6 +487,7 @@ func main() {
 	// Slack event handlers — deprecated, fully migrated to trigger system.
 
 	mux.HandleFunc("GET /cal/{slug}", api.ServeICS(pool))
+	mux.HandleFunc("GET /embed/{slug}", admin.EmbedCalendar())
 
 	// Discourage indexing; silence browser favicon requests.
 	mux.HandleFunc("GET /robots.txt", func(w http.ResponseWriter, r *http.Request) {

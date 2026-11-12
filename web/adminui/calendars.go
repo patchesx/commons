@@ -10,7 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"commons/api"
+	"commons/jobs"
 	"commons/store"
 	"commons/util"
 	admintempl "commons/web/templ"
@@ -22,13 +22,50 @@ func (d Deps) CalendarsPage() http.HandlerFunc {
 		calID := r.URL.Query().Get("cal")
 		year, _ := strconv.Atoi(r.URL.Query().Get("year"))
 		month, _ := strconv.Atoi(r.URL.Query().Get("month"))
+		view := r.URL.Query().Get("view")
+
 		cals, sel, events, y, mo, grid, membersByCal, err := loadCalendarsPageData(ctx, d.Pool, calID, year, month)
 		if err != nil {
 			http.Error(w, "failed to load calendars", http.StatusInternalServerError)
 			return
 		}
-		admintempl.CalendarsPage(cals, sel, y, mo, grid, events, membersByCal).Render(ctx, w)
+
+		var lastSynced *time.Time
+		var reminders []store.CalendarReminder
+		var agendaDays []admintempl.AgendaDay
+		var colors map[string]string
+		agendaStart := time.Now()
+		if sel != nil {
+			if sel.Kind != store.CalendarKindPersonal {
+				if sel.IcalURL != nil && *sel.IcalURL != "" {
+					if ts, ok := store.GetCalendarLastSynced(ctx, d.Pool, sel.ID); ok {
+						lastSynced = &ts
+					}
+				}
+				reminders, _ = store.ListCalendarReminders(ctx, d.Pool, sel.ID)
+			}
+			if view == "agenda" {
+				agendaStart = parseAgendaStart(r.URL.Query().Get("start"))
+				loc := calendarLocation(ctx, d.Pool, sel.ID)
+				occs, aerr := loadCalendarOccurrences(ctx, d.Pool, sel, agendaStart, agendaStart.AddDate(0, 0, 28))
+				if aerr != nil {
+					http.Error(w, "failed to load agenda", http.StatusInternalServerError)
+					return
+				}
+				agendaDays = admintempl.GroupByDay(occs, loc)
+				colors, _ = store.CalendarColorMap(ctx, d.Pool)
+			}
+		}
+		admintempl.CalendarsPage(cals, sel, y, mo, grid, events, membersByCal, lastSynced, reminders, view, agendaDays, colors, agendaStart, embedBaseURL(r)).Render(ctx, w)
 	}
+}
+
+// parseAgendaStart parses a YYYY-MM-DD agenda window start, defaulting to today.
+func parseAgendaStart(s string) time.Time {
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t
+	}
+	return time.Now()
 }
 
 func (d Deps) CalendarsCreate() http.HandlerFunc {
@@ -95,9 +132,10 @@ func (d Deps) CalendarsCreate() http.HandlerFunc {
 		}
 		importedCount := 0
 		if cal.IcalURL != nil {
-			events, err := api.FetchICSEvents(*cal.IcalURL)
-			if err == nil {
-				importedCount, _ = store.BulkInsertCalendarEvents(ctx, d.Pool, cal.ID, events)
+			// Initial import doubles as the first sync: uid-aware so the sync
+			// job can reconcile later runs.
+			if res, err := jobs.SyncFeedCalendar(ctx, d.Pool, &cal); err == nil {
+				importedCount = res.Inserted
 			}
 		}
 		redirect := "/admin/calendars?cal=" + cal.ID
@@ -181,14 +219,10 @@ func (d Deps) CalendarsConvertToManual() http.HandlerFunc {
 			FragmentError(w, r, "calendar not found or has no feed URL")
 			return
 		}
-		events, err := api.FetchICSEvents(*cal.IcalURL)
+		// Final reconcile against the feed, then the rows become manual data.
+		res, err := jobs.SyncFeedCalendar(ctx, d.Pool, cal)
 		if err != nil {
 			FragmentError(w, r, "failed to fetch feed: "+err.Error())
-			return
-		}
-		imported, err := store.BulkInsertCalendarEvents(ctx, d.Pool, id, events)
-		if err != nil {
-			FragmentError(w, r, "failed to import events")
 			return
 		}
 		cal.IcalURL = nil
@@ -197,29 +231,123 @@ func (d Deps) CalendarsConvertToManual() http.HandlerFunc {
 			return
 		}
 		store.LogAction(ctx, d.Pool, nil, "calendar.converted_to_manual", id, map[string]any{
-			"imported": imported,
+			"imported": res.Inserted,
 		})
 		w.Header().Set("HX-Redirect", "/admin/calendars?cal="+id)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-// adminICSFetcher adapts api.FetchICSEvents to the store.ICSFetcher signature.
-func adminICSFetcher(ctx context.Context, url string) ([]store.CalendarEvent, error) {
-	return api.FetchICSEvents(url)
+// CalendarsSyncNow handles POST /admin/fragments/calendars/{id}/sync-now —
+// runs an out-of-band feed sync for one calendar and redirects back.
+func (d Deps) CalendarsSyncNow() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		id := r.PathValue("id")
+		cal, err := store.GetCalendarByID(ctx, d.Pool, id)
+		if err != nil || cal.IcalURL == nil || *cal.IcalURL == "" {
+			FragmentError(w, r, "calendar not found or has no feed URL")
+			return
+		}
+		if _, err := jobs.SyncFeedCalendar(ctx, d.Pool, cal); err != nil {
+			FragmentError(w, r, "sync failed: "+err.Error())
+			return
+		}
+		w.Header().Set("HX-Redirect", "/admin/calendars?cal="+id)
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
-// loadCalendarEvents returns the events to display for a calendar: merged member
-// events for composites/personal, live feed events for syndicated calendars,
-// stored events for manual ones.
-func loadCalendarEvents(ctx context.Context, pool *pgxpool.Pool, cal *store.Calendar) ([]store.CalendarEvent, error) {
+// CalendarsAgenda handles GET /admin/fragments/calendars/{calId}/agenda —
+// the HTMX-swappable 4-week agenda pane with prev/next paging.
+func (d Deps) CalendarsAgenda() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		calID := r.PathValue("calId")
+		start := parseAgendaStart(r.URL.Query().Get("start"))
+
+		cal, err := store.GetCalendarByID(ctx, d.Pool, calID)
+		if err != nil {
+			FragmentError(w, r, "calendar not found")
+			return
+		}
+		loc := calendarLocation(ctx, d.Pool, calID)
+		occs, err := loadCalendarOccurrences(ctx, d.Pool, cal, start, start.AddDate(0, 0, 28))
+		if err != nil {
+			FragmentError(w, r, "failed to load events")
+			return
+		}
+		colors, _ := store.CalendarColorMap(ctx, d.Pool)
+		days := admintempl.GroupByDay(occs, loc)
+
+		w.Header().Set("Content-Type", "text/html")
+		admintempl.AgendaSection(calID, start, days, colors, calendarIsReadOnly(cal)).Render(ctx, w)
+	}
+}
+
+// CalendarsSaveReminders handles POST /admin/fragments/calendars/{id}/reminders.
+// Form fields: channel_id_N / lead_minutes_N row pairs (N = 0,1,2,…), plus a
+// channel select for adding rows. Empty channels are dropped.
+func (d Deps) CalendarsSaveReminders() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		id := r.PathValue("id")
+		if err := r.ParseForm(); err != nil {
+			FragmentError(w, r, "bad request")
+			return
+		}
+		if _, err := store.GetCalendarByID(ctx, d.Pool, id); err != nil {
+			FragmentError(w, r, "calendar not found")
+			return
+		}
+
+		var reminders []store.CalendarReminder
+		for i := 0; ; i++ {
+			channelID := r.FormValue(fmt.Sprintf("channel_id_%d", i))
+			if channelID == "" {
+				if i > 0 {
+					break // rows are contiguous; first empty index ends the set
+				}
+				continue
+			}
+			lead := 60
+			if v, err := strconv.Atoi(r.FormValue(fmt.Sprintf("lead_minutes_%d", i))); err == nil && v > 0 {
+				lead = v
+			}
+			reminders = append(reminders, store.CalendarReminder{
+				CalendarID:  id,
+				ChannelID:   channelID,
+				LeadMinutes: lead,
+			})
+		}
+
+		if err := store.SetCalendarReminders(ctx, d.Pool, id, reminders); err != nil {
+			FragmentError(w, r, "failed to save reminders: "+err.Error())
+			return
+		}
+		store.LogAction(ctx, d.Pool, nil, "calendar.reminders_saved", id, map[string]any{
+			"count": len(reminders),
+		})
+		w.Header().Set("HX-Redirect", "/admin/calendars?cal="+id)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// monthWindow returns [first of month, first of next month) in loc.
+func monthWindow(year, month int, loc *time.Location) (time.Time, time.Time) {
+	from := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, loc)
+	return from, from.AddDate(0, 1, 0)
+}
+
+// loadCalendarOccurrences returns the display occurrences for a calendar within
+// [from, to): merged member occurrences for composites/personal, expanded stored
+// events for standard calendars — manual ones and syndicated ones alike (feed
+// calendars' rows are kept fresh by the sync job).
+func loadCalendarOccurrences(ctx context.Context, pool *pgxpool.Pool, cal *store.Calendar, from, to time.Time) ([]store.EventOccurrence, error) {
 	if cal.Kind == store.CalendarKindComposite || cal.Kind == store.CalendarKindPersonal {
-		return store.ListCompositeEvents(ctx, pool, cal.ID, adminICSFetcher)
+		return store.ListCompositeOccurrences(ctx, pool, cal.ID, from, to)
 	}
-	if cal.IcalURL != nil && *cal.IcalURL != "" {
-		return api.FetchICSEvents(*cal.IcalURL)
-	}
-	return store.ListCalendarEvents(ctx, pool, cal.ID)
+	return store.ListCalendarOccurrences(ctx, pool, cal.ID, from, to)
 }
 
 // calendarIsReadOnly mirrors templ's calReadOnly for handler-side decisions.
@@ -251,13 +379,14 @@ func (d Deps) CalendarsGrid() http.HandlerFunc {
 			FragmentError(w, r, "calendar not found")
 			return
 		}
-		events, err := loadCalendarEvents(ctx, d.Pool, cal)
+		calLoc := calendarLocation(ctx, d.Pool, calID)
+		from, to := monthWindow(year, month, calLoc)
+		events, err := loadCalendarOccurrences(ctx, d.Pool, cal, from, to)
 		if err != nil {
 			FragmentError(w, r, "failed to load events")
 			return
 		}
 		grid := buildCalGrid(year, month)
-		calLoc := calendarLocation(ctx, d.Pool, calID)
 		w.Header().Set("Content-Type", "text/html")
 		admintempl.CalendarGridSection(calID, year, month, grid, events, calLoc, calendarIsReadOnly(cal)).Render(ctx, w)
 	}
@@ -275,7 +404,7 @@ func (d Deps) CalendarsEventForm() http.HandlerFunc {
 			}
 		}
 		w.Header().Set("Content-Type", "text/html")
-		admintempl.EventForm(calID, ev, "").Render(r.Context(), w)
+		admintempl.EventForm(admintempl.EventFormView{CalendarID: calID, Ev: ev, Recurrence: store.RecurrenceState{Freq: "none", End: "never"}}).Render(r.Context(), w)
 	}
 }
 
@@ -285,24 +414,77 @@ func (d Deps) CalendarsEventEditForm() http.HandlerFunc {
 		calID := r.PathValue("calId")
 		eventID := r.PathValue("eventId")
 		calLoc := calendarLocation(ctx, d.Pool, calID)
-		events, err := store.ListCalendarEvents(ctx, d.Pool, calID)
+
+		ev, err := store.GetCalendarEventByID(ctx, d.Pool, eventID)
 		if err != nil {
-			FragmentError(w, r, "failed to load events")
+			FragmentError(w, r, "event not found")
 			return
 		}
-		for _, e := range events {
-			if e.ID == eventID {
-				e.StartTime = e.StartTime.In(calLoc)
-				if e.EndTime != nil {
-					local := e.EndTime.In(calLoc)
-					e.EndTime = &local
+
+		view := admintempl.EventFormView{
+			CalendarID: calID,
+			EventID:    eventID,
+			Ev:         ev,
+			Recurrence: store.ParseRRULE(ev.RRule, ev.StartTime),
+		}
+
+		if ev.RRule != "" {
+			view.IsRecurring = true
+			// A series chip always passes ?occurrence=; a template-level open
+			// (no param) edits the whole series.
+			if occStr := r.URL.Query().Get("occurrence"); occStr != "" {
+				view.Occurrence = occStr
+				occ, perr := time.Parse(time.RFC3339, occStr)
+				if perr != nil {
+					FragmentError(w, r, "invalid occurrence")
+					return
 				}
-				w.Header().Set("Content-Type", "text/html")
-				admintempl.EventForm(calID, &e, "").Render(ctx, w)
-				return
+				// Prefill effective values: override fields if edited, else the
+				// template's fields applied to this occurrence's slot.
+				prefill := *ev
+				prefill.StartTime = occ
+				if ev.EndTime != nil {
+					dur := ev.EndTime.Sub(ev.StartTime)
+					end := occ.Add(dur)
+					prefill.EndTime = &end
+				}
+				if ov, oerr := store.GetEventOverride(ctx, d.Pool, eventID, occ); oerr == nil && ov != nil {
+					applyOverrideToEvent(&prefill, *ov)
+				}
+				prefill.StartTime = prefill.StartTime.In(calLoc)
+				if prefill.EndTime != nil {
+					local := prefill.EndTime.In(calLoc)
+					prefill.EndTime = &local
+				}
+				view.Ev = &prefill
+			}
+		} else {
+			ev.StartTime = ev.StartTime.In(calLoc)
+			if ev.EndTime != nil {
+				local := ev.EndTime.In(calLoc)
+				ev.EndTime = &local
 			}
 		}
-		FragmentError(w, r, "event not found")
+
+		w.Header().Set("Content-Type", "text/html")
+		admintempl.EventForm(view).Render(ctx, w)
+	}
+}
+
+// applyOverrideToEvent copies an override's full-replacement fields onto an event.
+func applyOverrideToEvent(ev *store.CalendarEvent, ov store.EventOverride) {
+	if ov.Title != nil {
+		ev.Title = *ov.Title
+	}
+	ev.Description = ov.Description
+	ev.Location = ov.Location
+	ev.URL = ov.URL
+	if ov.StartTime != nil {
+		ev.StartTime = *ov.StartTime
+	}
+	ev.EndTime = ov.EndTime
+	if ov.AllDay != nil {
+		ev.AllDay = *ov.AllDay
 	}
 }
 
@@ -318,12 +500,12 @@ func (d Deps) CalendarsEventCreate() http.HandlerFunc {
 		evt, errMsg := parseEventForm(r, calLoc)
 		if errMsg != "" {
 			w.Header().Set("Content-Type", "text/html")
-			admintempl.EventForm(calID, buildPartialEventFromForm(r, calLoc), errMsg).Render(ctx, w)
+			admintempl.EventForm(eventFormViewFromForm(r, calID, "", errMsg)).Render(ctx, w)
 			return
 		}
 		evt.CalendarID = calID
 		if err := store.CreateCalendarEvent(ctx, d.Pool, evt); err != nil {
-			FragmentError(w, r, "failed to create event")
+			FragmentError(w, r, "failed to create event: "+err.Error())
 			return
 		}
 		w.Header().Set("HX-Redirect", "/admin/calendars?cal="+calID)
@@ -344,14 +526,24 @@ func (d Deps) CalendarsEventUpdate() http.HandlerFunc {
 		evt, errMsg := parseEventForm(r, calLoc)
 		if errMsg != "" {
 			w.Header().Set("Content-Type", "text/html")
-			partial := buildPartialEventFromForm(r, calLoc)
-			partial.ID = eventID
-			admintempl.EventForm(calID, partial, errMsg).Render(ctx, w)
+			admintempl.EventForm(eventFormViewFromForm(r, calID, eventID, errMsg)).Render(ctx, w)
 			return
 		}
-		evt.ID = eventID
-		if err := store.UpdateCalendarEvent(ctx, d.Pool, evt); err != nil {
-			FragmentError(w, r, "failed to update event")
+		scope, err := store.ParseEventScope(r.FormValue("scope"))
+		if err != nil {
+			FragmentError(w, r, "invalid scope")
+			return
+		}
+		var occurrence time.Time
+		if occStr := r.FormValue("occurrence"); occStr != "" {
+			occurrence, err = time.Parse(time.RFC3339, occStr)
+			if err != nil {
+				FragmentError(w, r, "invalid occurrence")
+				return
+			}
+		}
+		if err := store.ApplyEventEdit(ctx, d.Pool, eventID, occurrence, scope, evt); err != nil {
+			FragmentError(w, r, "failed to update event: "+err.Error())
 			return
 		}
 		w.Header().Set("HX-Redirect", "/admin/calendars?cal="+calID)
@@ -361,7 +553,22 @@ func (d Deps) CalendarsEventUpdate() http.HandlerFunc {
 
 func (d Deps) CalendarsEventDelete() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := store.DeleteCalendarEvent(r.Context(), d.Pool, r.PathValue("eventId")); err != nil {
+		ctx := r.Context()
+		eventID := r.PathValue("eventId")
+		scope, err := store.ParseEventScope(r.URL.Query().Get("scope"))
+		if err != nil {
+			FragmentError(w, r, "invalid scope")
+			return
+		}
+		var occurrence time.Time
+		if occStr := r.URL.Query().Get("occurrence"); occStr != "" {
+			occurrence, err = time.Parse(time.RFC3339, occStr)
+			if err != nil {
+				FragmentError(w, r, "invalid occurrence")
+				return
+			}
+		}
+		if err := store.DeleteEventWithScope(ctx, d.Pool, eventID, occurrence, scope); err != nil {
 			FragmentError(w, r, "failed to delete event")
 			return
 		}
@@ -370,7 +577,7 @@ func (d Deps) CalendarsEventDelete() http.HandlerFunc {
 	}
 }
 
-func loadCalendarsPageData(ctx context.Context, pool *pgxpool.Pool, calID string, year, month int) ([]store.Calendar, *store.Calendar, []store.CalendarEvent, int, int, []admintempl.CalGridCell, map[string][]string, error) {
+func loadCalendarsPageData(ctx context.Context, pool *pgxpool.Pool, calID string, year, month int) ([]store.Calendar, *store.Calendar, []store.EventOccurrence, int, int, []admintempl.CalGridCell, map[string][]string, error) {
 	now := time.Now()
 	if year == 0 {
 		year = now.Year()
@@ -411,7 +618,9 @@ func loadCalendarsPageData(ctx context.Context, pool *pgxpool.Pool, calID string
 	if selectedCal == nil {
 		return calendars, nil, nil, year, month, nil, membersByCal, nil
 	}
-	events, err := loadCalendarEvents(ctx, pool, selectedCal)
+	calLoc := calendarLocation(ctx, pool, selectedCal.ID)
+	from, to := monthWindow(year, month, calLoc)
+	events, err := loadCalendarOccurrences(ctx, pool, selectedCal, from, to)
 	if err != nil {
 		return nil, nil, nil, year, month, nil, nil, err
 	}
@@ -448,6 +657,26 @@ func calendarLocation(ctx context.Context, pool *pgxpool.Pool, calID string) *ti
 	return loc
 }
 
+// recurrenceStateFromForm collects the recurrence editor's fields.
+func recurrenceStateFromForm(r *http.Request) store.RecurrenceState {
+	intVal := func(name string) int {
+		v, _ := strconv.Atoi(r.FormValue(name))
+		return v
+	}
+	return store.RecurrenceState{
+		Freq:        r.FormValue("repeat"),
+		Interval:    intVal("interval"),
+		ByDay:       r.Form["byday"],
+		MonthlyMode: r.FormValue("monthly_mode"),
+		ByMonthDay:  intVal("bymonthday"),
+		Nth:         intVal("nth"),
+		NthWeekday:  r.FormValue("nth_weekday"),
+		End:         r.FormValue("end"),
+		Until:       r.FormValue("until"),
+		Count:       intVal("count"),
+	}
+}
+
 func buildPartialEventFromForm(r *http.Request, loc *time.Location) *store.CalendarEvent {
 	evt := &store.CalendarEvent{
 		Title:  r.FormValue("title"),
@@ -466,6 +695,22 @@ func buildPartialEventFromForm(r *http.Request, loc *time.Location) *store.Calen
 		evt.Location = &v
 	}
 	return evt
+}
+
+// eventFormViewFromForm rebuilds the form view after a validation error so the
+// user's input (including recurrence selections) is preserved.
+func eventFormViewFromForm(r *http.Request, calID, eventID, errMsg string) admintempl.EventFormView {
+	ev := buildPartialEventFromForm(r, time.UTC)
+	return admintempl.EventFormView{
+		CalendarID: calID,
+		EventID:    eventID,
+		Occurrence: r.FormValue("occurrence"),
+		// The occurrence hidden input is only present on series-occurrence edits.
+		IsRecurring: r.FormValue("occurrence") != "",
+		Ev:          ev,
+		Recurrence:  recurrenceStateFromForm(r),
+		ErrMsg:      errMsg,
+	}
 }
 
 func parseEventForm(r *http.Request, loc *time.Location) (*store.CalendarEvent, string) {
@@ -500,6 +745,12 @@ func parseEventForm(r *http.Request, loc *time.Location) (*store.CalendarEvent, 
 	}
 	if u := r.FormValue("url"); u != "" {
 		evt.URL = &u
+	}
+	// Recurrence: built from the editor state, anchored at the start time.
+	if rule, rerr := store.BuildRRULE(recurrenceStateFromForm(r), startTime); rerr != nil {
+		return nil, "Invalid recurrence: " + rerr.Error()
+	} else {
+		evt.RRule = rule
 	}
 	return evt, ""
 }

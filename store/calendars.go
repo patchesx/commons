@@ -34,15 +34,18 @@ type CalendarEvent struct {
 	StartTime   time.Time
 	EndTime     *time.Time
 	AllDay      bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// RRule is a non-empty iCal RRULE string (no DTSTART) when this event is a
+	// recurring series; its StartTime is the first occurrence.
+	RRule     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // ListCalendars returns all non-personal calendars ordered by display_order then name.
 // Personal calendars are excluded — they render only for their owner in Slack App Home.
 func ListCalendars(ctx context.Context, pool *pgxpool.Pool) ([]Calendar, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, name, slug, description, ical_url, timezone, display_order, kind, color, created_by, created_at, updated_at
+		SELECT id, name, COALESCE(slug, ''), description, ical_url, timezone, display_order, kind, color, created_by, created_at, updated_at
 		FROM calendars
 		WHERE kind <> 'personal'
 		ORDER BY display_order, name
@@ -58,7 +61,7 @@ func ListCalendars(ctx context.Context, pool *pgxpool.Pool) ([]Calendar, error) 
 func GetCalendarBySlug(ctx context.Context, pool *pgxpool.Pool, slug string) (*Calendar, error) {
 	c := &Calendar{}
 	err := pool.QueryRow(ctx, `
-		SELECT id, name, slug, description, ical_url, timezone, display_order, kind, color, created_by, created_at, updated_at
+		SELECT id, name, COALESCE(slug, ''), description, ical_url, timezone, display_order, kind, color, created_by, created_at, updated_at
 		FROM calendars
 		WHERE slug = $1
 	`, slug).Scan(&c.ID, &c.Name, &c.Slug, &c.Description, &c.IcalURL, &c.Timezone, &c.DisplayOrder, &c.Kind, &c.Color, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
@@ -75,7 +78,7 @@ func GetCalendarBySlug(ctx context.Context, pool *pgxpool.Pool, slug string) (*C
 func GetCalendarByID(ctx context.Context, pool *pgxpool.Pool, id string) (*Calendar, error) {
 	c := &Calendar{}
 	err := pool.QueryRow(ctx, `
-		SELECT id, name, slug, description, ical_url, timezone, display_order, kind, color, created_by, created_at, updated_at
+		SELECT id, name, COALESCE(slug, ''), description, ical_url, timezone, display_order, kind, color, created_by, created_at, updated_at
 		FROM calendars
 		WHERE id = $1
 	`, id).Scan(&c.ID, &c.Name, &c.Slug, &c.Description, &c.IcalURL, &c.Timezone, &c.DisplayOrder, &c.Kind, &c.Color, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
@@ -89,16 +92,21 @@ func GetCalendarByID(ctx context.Context, pool *pgxpool.Pool, id string) (*Calen
 }
 
 // CreateCalendar inserts a new calendar and populates c.ID, c.CreatedAt, and c.UpdatedAt.
-// An empty Kind defaults to standard.
+// An empty Kind defaults to standard. An empty slug is stored as NULL — slug has a
+// UNIQUE constraint and slug-less rows (personal calendars) must not collide on "".
 func CreateCalendar(ctx context.Context, pool *pgxpool.Pool, c *Calendar) error {
 	if c.Kind == "" {
 		c.Kind = CalendarKindStandard
+	}
+	var slug *string
+	if c.Slug != "" {
+		slug = &c.Slug
 	}
 	return pool.QueryRow(ctx, `
 		INSERT INTO calendars (name, slug, description, ical_url, timezone, display_order, kind, color, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, created_at, updated_at
-	`, c.Name, c.Slug, c.Description, c.IcalURL, c.Timezone, c.DisplayOrder, c.Kind, c.Color, c.CreatedBy,
+	`, c.Name, slug, c.Description, c.IcalURL, c.Timezone, c.DisplayOrder, c.Kind, c.Color, c.CreatedBy,
 	).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt)
 }
 
@@ -137,66 +145,10 @@ func CountUpcomingEvents(ctx context.Context, pool *pgxpool.Pool, withinDays int
 	return count, err
 }
 
-// ListUpcomingCalendarEvents returns future events across all calendars, ordered by start_time.
-// Pass limit=0 for no limit.
-func ListUpcomingCalendarEvents(ctx context.Context, pool *pgxpool.Pool, limit int) ([]CalendarEvent, error) {
-	var (
-		rows pgx.Rows
-		err  error
-	)
-	if limit > 0 {
-		rows, err = pool.Query(ctx, `
-			SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at, updated_at
-			FROM calendar_events WHERE start_time >= NOW() ORDER BY start_time LIMIT $1
-		`, limit)
-	} else {
-		rows, err = pool.Query(ctx, `
-			SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at, updated_at
-			FROM calendar_events WHERE start_time >= NOW() ORDER BY start_time
-		`)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanCalendarEvents(rows)
-}
-
-// ListUpcomingEventsForCalendar returns future events for one calendar within the next withinDays days.
-// Pass withinDays=0 for no upper bound.
-func ListUpcomingEventsForCalendar(ctx context.Context, pool *pgxpool.Pool, calendarID string, withinDays int) ([]CalendarEvent, error) {
-	var (
-		rows pgx.Rows
-		err  error
-	)
-	if withinDays > 0 {
-		rows, err = pool.Query(ctx, `
-			SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at, updated_at
-			FROM calendar_events
-			WHERE calendar_id = $1
-			  AND start_time >= NOW()
-			  AND start_time < NOW() + $2 * INTERVAL '1 day'
-			ORDER BY start_time
-		`, calendarID, withinDays)
-	} else {
-		rows, err = pool.Query(ctx, `
-			SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at, updated_at
-			FROM calendar_events
-			WHERE calendar_id = $1 AND start_time >= NOW()
-			ORDER BY start_time
-		`, calendarID)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanCalendarEvents(rows)
-}
-
 // ListCalendarEvents returns all events for a calendar ordered by start_time ascending.
 func ListCalendarEvents(ctx context.Context, pool *pgxpool.Pool, calendarID string) ([]CalendarEvent, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, created_at, updated_at
+		SELECT id, calendar_id, title, description, location, url, start_time, end_time, all_day, COALESCE(rrule, ''), created_at, updated_at
 		FROM calendar_events
 		WHERE calendar_id = $1
 		ORDER BY start_time
@@ -220,10 +172,10 @@ func CreateCalendarEvent(ctx context.Context, pool *pgxpool.Pool, e *CalendarEve
 		return ErrNotEditable
 	}
 	return pool.QueryRow(ctx, `
-		INSERT INTO calendar_events (calendar_id, title, description, location, url, start_time, end_time, all_day)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO calendar_events (calendar_id, title, description, location, url, start_time, end_time, all_day, rrule)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, created_at, updated_at
-	`, e.CalendarID, e.Title, e.Description, e.Location, e.URL, e.StartTime, e.EndTime, e.AllDay,
+	`, e.CalendarID, e.Title, e.Description, e.Location, e.URL, e.StartTime, e.EndTime, e.AllDay, nullStr(e.RRule),
 	).Scan(&e.ID, &e.CreatedAt, &e.UpdatedAt)
 }
 
@@ -232,10 +184,10 @@ func GetCalendarEventByID(ctx context.Context, pool *pgxpool.Pool, id string) (*
 	e := &CalendarEvent{}
 	err := pool.QueryRow(ctx, `
 		SELECT id, calendar_id, title, description, location, url,
-		       start_time, end_time, all_day, created_at, updated_at
+		       start_time, end_time, all_day, COALESCE(rrule, ''), created_at, updated_at
 		FROM calendar_events WHERE id = $1
 	`, id).Scan(&e.ID, &e.CalendarID, &e.Title, &e.Description, &e.Location, &e.URL,
-		&e.StartTime, &e.EndTime, &e.AllDay, &e.CreatedAt, &e.UpdatedAt)
+		&e.StartTime, &e.EndTime, &e.AllDay, &e.RRule, &e.CreatedAt, &e.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -250,9 +202,9 @@ func UpdateCalendarEvent(ctx context.Context, pool *pgxpool.Pool, e *CalendarEve
 	_, err := pool.Exec(ctx, `
 		UPDATE calendar_events
 		SET title = $1, description = $2, location = $3, url = $4,
-		    start_time = $5, end_time = $6, all_day = $7, updated_at = NOW()
-		WHERE id = $8
-	`, e.Title, e.Description, e.Location, e.URL, e.StartTime, e.EndTime, e.AllDay, e.ID)
+		    start_time = $5, end_time = $6, all_day = $7, rrule = $8, updated_at = NOW()
+		WHERE id = $9
+	`, e.Title, e.Description, e.Location, e.URL, e.StartTime, e.EndTime, e.AllDay, nullStr(e.RRule), e.ID)
 	return err
 }
 
@@ -260,26 +212,6 @@ func UpdateCalendarEvent(ctx context.Context, pool *pgxpool.Pool, e *CalendarEve
 func DeleteCalendarEvent(ctx context.Context, pool *pgxpool.Pool, id string) error {
 	_, err := pool.Exec(ctx, `DELETE FROM calendar_events WHERE id = $1`, id)
 	return err
-}
-
-// BulkInsertCalendarEvents inserts a slice of events, skipping duplicates on (calendar_id, title, start_time).
-// Returns the count of rows actually inserted.
-func BulkInsertCalendarEvents(ctx context.Context, pool *pgxpool.Pool, calendarID string, events []CalendarEvent) (int, error) {
-	inserted := 0
-	for i := range events {
-		events[i].CalendarID = calendarID
-		tag, err := pool.Exec(ctx, `
-			INSERT INTO calendar_events (calendar_id, title, description, location, url, start_time, end_time, all_day)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-			ON CONFLICT (calendar_id, title, start_time) DO NOTHING
-		`, calendarID, events[i].Title, events[i].Description, events[i].Location, events[i].URL,
-			events[i].StartTime, events[i].EndTime, events[i].AllDay)
-		if err != nil {
-			return inserted, err
-		}
-		inserted += int(tag.RowsAffected())
-	}
-	return inserted, nil
 }
 
 func scanCalendars(rows interface {
@@ -307,10 +239,18 @@ func scanCalendarEvents(rows interface {
 	for rows.Next() {
 		var e CalendarEvent
 		if err := rows.Scan(&e.ID, &e.CalendarID, &e.Title, &e.Description, &e.Location, &e.URL,
-			&e.StartTime, &e.EndTime, &e.AllDay, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			&e.StartTime, &e.EndTime, &e.AllDay, &e.RRule, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return nil, err
 		}
 		events = append(events, e)
 	}
 	return events, rows.Err()
+}
+
+// nullStr maps an empty string to a SQL NULL.
+func nullStr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

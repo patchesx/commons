@@ -104,6 +104,11 @@ func Publish(ctx context.Context, pool *pgxpool.Pool, encKey []byte, client *sla
 	if hasPermission(perms, permissions.CalendarView) {
 		var activeCal *store.Calendar
 
+		personalCal, perr := store.GetPersonalCalendar(ctx, pool, user.ID)
+		if perr != nil {
+			log.Printf("slack/apphome: get personal calendar for %s: %v", user.ID, perr)
+		}
+
 		// 1. User's personal selection.
 		if user.SelectedCalendarID != nil && *user.SelectedCalendarID != "" {
 			if c, err := store.GetCalendarByID(ctx, pool, *user.SelectedCalendarID); err == nil {
@@ -128,23 +133,33 @@ func Publish(ctx context.Context, pool *pgxpool.Pool, encKey []byte, client *sla
 		}
 
 		if activeCal != nil {
-			// Build a calendar-switcher dropdown when there are multiple calendars.
-			// It is passed into calendarBlocksForCalendar as an accessory on the
-			// "Upcoming Events" title row so it doesn't occupy its own separate section.
+			// Build the calendar-switcher dropdown: the user's My Calendar pinned on
+			// top (when it exists), then all shared calendars. Passed into
+			// calendarBlocksForCalendar as an accessory on the "Upcoming Events" title
+			// row so it doesn't occupy its own separate section.
 			var calAccessory slacklib.BlockElement
 			cals, _ := store.ListCalendars(ctx, pool)
-			if len(cals) > 1 {
-				options := make([]*slacklib.OptionBlockObject, len(cals))
+			var options []*slacklib.OptionBlockObject
+			if personalCal != nil {
+				options = append(options, slacklib.NewOptionBlockObject(
+					personalCal.ID,
+					slacklib.NewTextBlockObject(slacklib.PlainTextType, "My Calendar", false, false),
+					nil,
+				))
+			}
+			for _, c := range cals {
+				options = append(options, slacklib.NewOptionBlockObject(
+					c.ID,
+					slacklib.NewTextBlockObject(slacklib.PlainTextType, c.Name, false, false),
+					nil,
+				))
+			}
+			if len(options) > 1 {
 				var initialOption *slacklib.OptionBlockObject
-				for i, c := range cals {
-					opt := slacklib.NewOptionBlockObject(
-						c.ID,
-						slacklib.NewTextBlockObject(slacklib.PlainTextType, c.Name, false, false),
-						nil,
-					)
-					options[i] = opt
-					if c.ID == activeCal.ID {
+				for _, opt := range options {
+					if opt.Value == activeCal.ID {
 						initialOption = opt
+						break
 					}
 				}
 				sel := slacklib.NewOptionsSelectBlockElement(
@@ -172,6 +187,22 @@ func Publish(ctx context.Context, pool *pgxpool.Pool, encKey []byte, client *sla
 					slacklib.NewTextBlockObject(slacklib.PlainTextType, ":pencil2: Edit Events", true, false),
 				)
 				blks = append(blks, slacklib.NewActionBlock("calendar_manage_actions", addBtn, editBtn))
+			}
+
+			// My Calendar actions: offer creation when none exists and there is
+			// something to compose; offer editing when it is the active view.
+			if personalCal == nil && len(cals) > 0 {
+				createBtn := slacklib.NewButtonBlockElement(
+					ActionCreateMyCalendar, "create",
+					slacklib.NewTextBlockObject(slacklib.PlainTextType, ":star: Create My Calendar", true, false),
+				)
+				blks = append(blks, slacklib.NewActionBlock("my_calendar_actions", createBtn))
+			} else if personalCal != nil && activeCal.ID == personalCal.ID {
+				editMyBtn := slacklib.NewButtonBlockElement(
+					ActionEditMyCalendar, personalCal.ID,
+					slacklib.NewTextBlockObject(slacklib.PlainTextType, ":star: Edit My Calendar", true, false),
+				)
+				blks = append(blks, slacklib.NewActionBlock("my_calendar_actions", editMyBtn))
 			}
 		}
 	}

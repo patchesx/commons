@@ -221,15 +221,17 @@ func UpsertManagedScheduledTrigger(ctx context.Context, pool *pgxpool.Pool, p Up
 		p.Timezone = "UTC"
 	}
 
-	// Check for existing managed trigger with the same ManagedBy.
+	// Check for an existing managed trigger with the same (ManagedBy, Name).
+	// Keying on the pair (not ManagedBy alone) lets one manager own several
+	// scheduled jobs — otherwise later seeds silently overwrite earlier ones.
 	var existingID string
 	var existingManagedBy *string
 	err := pool.QueryRow(ctx, `
 		SELECT ts.id, ts.managed_by
 		FROM trigger_sources ts
 		JOIN scheduled_trigger_config stc ON stc.trigger_id = ts.id
-		WHERE ts.type = 'scheduled' AND ts.managed_by = $1`,
-		p.ManagedBy).Scan(&existingID, &existingManagedBy)
+		WHERE ts.type = 'scheduled' AND ts.managed_by = $1 AND ts.name = $2`,
+		p.ManagedBy, p.Name).Scan(&existingID, &existingManagedBy)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}

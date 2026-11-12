@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"time"
 
@@ -31,16 +30,36 @@ var (
 	// ErrNotEditable is returned when events are added directly to a calendar that
 	// only renders merged member events (composite or personal).
 	ErrNotEditable = errors.New("this calendar does not support direct events")
+	// ErrNotFeedCalendar is returned when feed reconciliation is attempted on a
+	// calendar without a live feed URL — reconcile deletes rows missing from
+	// the feed, which would destroy manual data.
+	ErrNotFeedCalendar = errors.New("calendar has no live feed")
 )
 
-// ICSFetcher fetches events from a remote ICS feed for a syndicated member calendar.
-// Injected so the store layer stays free of HTTP concerns.
-type ICSFetcher func(ctx context.Context, url string) ([]CalendarEvent, error)
+// CalendarColorMap returns calendarID → hex color for every calendar that has
+// one set. Powers color chips in agenda views; calendars without a color are
+// absent from the map (callers fall back to a default).
+func CalendarColorMap(ctx context.Context, pool *pgxpool.Pool) (map[string]string, error) {
+	rows, err := pool.Query(ctx, `SELECT id, color FROM calendars WHERE color IS NOT NULL AND color <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, color string
+		if err := rows.Scan(&id, &color); err != nil {
+			return nil, err
+		}
+		out[id] = color
+	}
+	return out, rows.Err()
+}
 
 // ListCalendarMembers returns the member calendars of a composite, ordered by display_order then name.
 func ListCalendarMembers(ctx context.Context, pool *pgxpool.Pool, compositeID string) ([]Calendar, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT c.id, c.name, c.slug, c.description, c.ical_url, c.timezone, c.display_order, c.kind, c.color, c.created_by, c.created_at, c.updated_at
+		SELECT c.id, c.name, COALESCE(c.slug, ''), c.description, c.ical_url, c.timezone, c.display_order, c.kind, c.color, c.created_by, c.created_at, c.updated_at
 		FROM calendar_members m
 		JOIN calendars c ON c.id = m.member_id
 		WHERE m.composite_id = $1
@@ -176,11 +195,11 @@ func WouldCreateCycle(ctx context.Context, pool *pgxpool.Pool, compositeID, cand
 	return walk(candidateID)
 }
 
-// ListCompositeEvents returns the merged, deduplicated events of a composite calendar
-// (or personal calendar). Members are expanded recursively; syndicated members are
-// fetched via fetchICS (nil skips them). A failing feed is logged and skipped so one
-// dead member does not blank the whole view.
-func ListCompositeEvents(ctx context.Context, pool *pgxpool.Pool, compositeID string, fetchICS ICSFetcher) ([]CalendarEvent, error) {
+// ListCompositeEvents returns the merged, deduplicated raw events of a
+// composite calendar (or personal calendar). Members are expanded recursively.
+// Superseded for display by ListCompositeOccurrences; retained for callers
+// needing raw templates. Feed members read their synced stored rows.
+func ListCompositeEvents(ctx context.Context, pool *pgxpool.Pool, compositeID string) ([]CalendarEvent, error) {
 	var merged []CalendarEvent
 	seen := map[string]bool{}
 	var walk func(calID string) error
@@ -194,28 +213,17 @@ func ListCompositeEvents(ctx context.Context, pool *pgxpool.Pool, compositeID st
 			return err
 		}
 		for _, m := range members {
-			switch {
-			case m.Kind == CalendarKindComposite:
+			if m.Kind == CalendarKindComposite {
 				if err := walk(m.ID); err != nil {
 					return err
 				}
-			case m.IcalURL != nil && *m.IcalURL != "":
-				if fetchICS == nil {
-					continue
-				}
-				evts, err := fetchICS(ctx, *m.IcalURL)
-				if err != nil {
-					log.Printf("store: composite member feed %s (%s): %v", m.Name, m.ID, err)
-					continue
-				}
-				merged = append(merged, evts...)
-			default:
-				evts, err := ListCalendarEvents(ctx, pool, m.ID)
-				if err != nil {
-					return err
-				}
-				merged = append(merged, evts...)
+				continue
 			}
+			evts, err := ListCalendarEvents(ctx, pool, m.ID)
+			if err != nil {
+				return err
+			}
+			merged = append(merged, evts...)
 		}
 		return nil
 	}
@@ -244,4 +252,67 @@ func dedupeSortEvents(events []CalendarEvent) []CalendarEvent {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].StartTime.Before(out[j].StartTime) })
 	return out
+}
+
+// ListCompositeOccurrences returns the merged, deduplicated occurrences of a
+// composite (or personal) calendar within [from, to). Members are expanded
+// recursively; every standard member — manual or syndicated — reads its stored
+// events (feed calendars' rows are kept fresh by the sync job), with series
+// expanded in the member's own timezone and overrides applied.
+func ListCompositeOccurrences(ctx context.Context, pool *pgxpool.Pool, compositeID string, from, to time.Time) ([]EventOccurrence, error) {
+	var merged []EventOccurrence
+	visited := map[string]bool{}
+	var walk func(calID string) error
+	walk = func(calID string) error {
+		if visited[calID] {
+			return nil // defense in depth against cycles
+		}
+		visited[calID] = true
+		members, err := ListCalendarMembers(ctx, pool, calID)
+		if err != nil {
+			return err
+		}
+		for _, m := range members {
+			if m.Kind == CalendarKindComposite {
+				if err := walk(m.ID); err != nil {
+					return err
+				}
+				continue
+			}
+			// Standard member (manual or syndicated): stored events + overrides,
+			// series expanded in the window, standalone events unclipped (callers
+			// re-filter by their own display windows).
+			memberEvents, err := ListCalendarEvents(ctx, pool, m.ID)
+			if err != nil {
+				return err
+			}
+			memberOverrides, err := ListEventOverridesByIDs(ctx, pool, eventIDs(memberEvents))
+			if err != nil {
+				return err
+			}
+			mLoc := calendarLocation(m.Timezone)
+			merged = append(merged, expandEvents(memberEvents, memberOverrides, from, to, mLoc, false)...)
+		}
+		return nil
+	}
+	if err := walk(compositeID); err != nil {
+		return nil, err
+	}
+
+	type key struct {
+		title string
+		start time.Time
+	}
+	seen := make(map[key]bool, len(merged))
+	out := make([]EventOccurrence, 0, len(merged))
+	for _, o := range merged {
+		k := key{title: o.Title, start: o.StartTime}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, o)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].StartTime.Before(out[j].StartTime) })
+	return out, nil
 }

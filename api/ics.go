@@ -1,28 +1,20 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
-	ical "github.com/emersion/go-ical"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/teambition/rrule-go"
 
 	"commons/store"
 )
 
-// icsStoreFetcher adapts FetchICSEvents to the store.ICSFetcher signature.
-func icsStoreFetcher(ctx context.Context, url string) ([]store.CalendarEvent, error) {
-	return FetchICSEvents(url)
-}
-
 // ServeICS handles GET /cal/{slug} — public, no auth required.
 // Generates and returns a valid iCalendar feed for the named calendar.
-// Composites serve their merged, deduplicated member events.
+// Composites serve their merged, deduplicated member occurrences.
 func ServeICS(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -44,17 +36,6 @@ func ServeICS(pool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		var events []store.CalendarEvent
-		if cal.Kind == store.CalendarKindComposite {
-			events, err = store.ListCompositeEvents(ctx, pool, cal.ID, icsStoreFetcher)
-		} else {
-			events, err = store.ListCalendarEvents(ctx, pool, cal.ID)
-		}
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-
 		w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.ics"`, slug))
 
@@ -68,21 +49,55 @@ func ServeICS(pool *pgxpool.Pool) http.HandlerFunc {
 		sb.WriteString(icsLine("X-WR-CALNAME", cal.Name))
 		sb.WriteString(icsLine("X-WR-TIMEZONE", cal.Timezone))
 
+		if cal.Kind == store.CalendarKindComposite {
+			// Composites export flat, expanded occurrences (series members expanded
+			// over the same ±1/+2-year window the feed parser uses).
+			from := now.AddDate(-1, 0, 0)
+			to := now.AddDate(2, 0, 0)
+			occs, err := store.ListCompositeOccurrences(ctx, pool, cal.ID, from, to)
+			if err != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			for _, occ := range occs {
+				sb.WriteString("BEGIN:VEVENT\r\n")
+				sb.WriteString(icsLine("UID", icsOccUID(occ)+"@commons"))
+				sb.WriteString(icsLine("DTSTAMP", now.Format("20060102T150405Z")))
+				writeOccurrenceTimes(&sb, occ)
+				sb.WriteString(icsLine("SUMMARY", icsEscape(occ.Title)))
+				if occ.Description != nil && *occ.Description != "" {
+					sb.WriteString(icsLine("DESCRIPTION", icsEscape(*occ.Description)))
+				}
+				if occ.Location != nil && *occ.Location != "" {
+					sb.WriteString(icsLine("LOCATION", icsEscape(*occ.Location)))
+				}
+				if occ.URL != nil && *occ.URL != "" {
+					sb.WriteString(icsLine("URL", *occ.URL))
+				}
+				sb.WriteString("END:VEVENT\r\n")
+			}
+			sb.WriteString("END:VCALENDAR\r\n")
+			fmt.Fprint(w, sb.String())
+			return
+		}
+
+		events, err := store.ListCalendarEvents(ctx, pool, cal.ID)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		overrides, err := store.ListEventOverridesByIDs(ctx, pool, icsEventIDs(events))
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
 		for _, e := range events {
+			// Master VEVENT: the series template (with its rule) or the standalone event.
 			sb.WriteString("BEGIN:VEVENT\r\n")
 			sb.WriteString(icsLine("UID", e.ID+"@commons"))
 			sb.WriteString(icsLine("DTSTAMP", now.Format("20060102T150405Z")))
-			if e.AllDay {
-				sb.WriteString(icsLine("DTSTART;VALUE=DATE", e.StartTime.UTC().Format("20060102")))
-				if e.EndTime != nil {
-					sb.WriteString(icsLine("DTEND;VALUE=DATE", e.EndTime.UTC().Format("20060102")))
-				}
-			} else {
-				sb.WriteString(icsLine("DTSTART", e.StartTime.UTC().Format("20060102T150405Z")))
-				if e.EndTime != nil {
-					sb.WriteString(icsLine("DTEND", e.EndTime.UTC().Format("20060102T150405Z")))
-				}
-			}
+			writeEventTimes(&sb, e)
 			sb.WriteString(icsLine("SUMMARY", icsEscape(e.Title)))
 			if e.Description != nil && *e.Description != "" {
 				sb.WriteString(icsLine("DESCRIPTION", icsEscape(*e.Description)))
@@ -93,7 +108,68 @@ func ServeICS(pool *pgxpool.Pool) http.HandlerFunc {
 			if e.URL != nil && *e.URL != "" {
 				sb.WriteString(icsLine("URL", *e.URL))
 			}
+			if e.RRule != "" {
+				sb.WriteString(icsLine("RRULE", e.RRule))
+				// Skipped occurrences become EXDATEs on the master.
+				for _, ov := range overrides[e.ID] {
+					if ov.Deleted {
+						sb.WriteString(icsLine("EXDATE", ov.OccurrenceStart.UTC().Format("20060102T150405Z")))
+					}
+				}
+			}
 			sb.WriteString("END:VEVENT\r\n")
+
+			// Edited occurrences: override VEVENTs sharing the series UID and
+			// addressed by RECURRENCE-ID (the original series slot).
+			for _, ov := range overrides[e.ID] {
+				if ov.Deleted {
+					continue
+				}
+				sb.WriteString("BEGIN:VEVENT\r\n")
+				sb.WriteString(icsLine("UID", e.ID+"@commons"))
+				sb.WriteString(icsLine("DTSTAMP", now.Format("20060102T150405Z")))
+				sb.WriteString(icsLine("RECURRENCE-ID", ov.OccurrenceStart.UTC().Format("20060102T150405Z")))
+				allDay := e.AllDay
+				if ov.AllDay != nil {
+					allDay = *ov.AllDay
+				}
+				start := e.StartTime
+				if ov.StartTime != nil {
+					start = *ov.StartTime
+				}
+				end := e.EndTime
+				if ov.EndTime != nil {
+					end = ov.EndTime
+				}
+				writeICSRange(&sb, start, end, allDay)
+				title := e.Title
+				if ov.Title != nil {
+					title = *ov.Title
+				}
+				sb.WriteString(icsLine("SUMMARY", icsEscape(title)))
+				desc := e.Description
+				if ov.Description != nil {
+					desc = ov.Description
+				}
+				if desc != nil && *desc != "" {
+					sb.WriteString(icsLine("DESCRIPTION", icsEscape(*desc)))
+				}
+				loc := e.Location
+				if ov.Location != nil {
+					loc = ov.Location
+				}
+				if loc != nil && *loc != "" {
+					sb.WriteString(icsLine("LOCATION", icsEscape(*loc)))
+				}
+				url := e.URL
+				if ov.URL != nil {
+					url = ov.URL
+				}
+				if url != nil && *url != "" {
+					sb.WriteString(icsLine("URL", *url))
+				}
+				sb.WriteString("END:VEVENT\r\n")
+			}
 		}
 
 		sb.WriteString("END:VCALENDAR\r\n")
@@ -101,104 +177,43 @@ func ServeICS(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-// FetchICSEvents fetches an ICS URL and returns all events as CalendarEvent values.
-// Recurring events are expanded over a ±1/+2 year window using rrule-go, which
-// correctly handles positional BYDAY rules (e.g. FREQ=MONTHLY;BYDAY=1WE).
-func FetchICSEvents(url string) ([]store.CalendarEvent, error) {
-	resp, err := http.Get(url) //nolint:noctx
-	if err != nil {
-		return nil, err
+func icsEventIDs(events []store.CalendarEvent) []string {
+	ids := make([]string, 0, len(events))
+	for _, e := range events {
+		ids = append(ids, e.ID)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ICS fetch returned HTTP %d", resp.StatusCode)
+	return ids
+}
+
+// icsOccUID builds a stable unique UID for a flat-exported occurrence.
+func icsOccUID(occ store.EventOccurrence) string {
+	if occ.ID == "" {
+		// Feed-sourced occurrence without a DB ID — derive from content.
+		return fmt.Sprintf("%x", occ.Title+occ.StartTime.UTC().Format(time.RFC3339))
 	}
+	return occ.ID + "-" + occ.OccurrenceStart.UTC().Format("20060102T150405Z")
+}
 
-	cal, err := ical.NewDecoder(resp.Body).Decode()
-	if err != nil {
-		return nil, err
+func writeEventTimes(sb *strings.Builder, e store.CalendarEvent) {
+	writeICSRange(sb, e.StartTime, e.EndTime, e.AllDay)
+}
+
+func writeOccurrenceTimes(sb *strings.Builder, occ store.EventOccurrence) {
+	writeICSRange(sb, occ.StartTime, occ.EndTime, occ.AllDay)
+}
+
+func writeICSRange(sb *strings.Builder, start time.Time, end *time.Time, allDay bool) {
+	if allDay {
+		sb.WriteString(icsLine("DTSTART;VALUE=DATE", start.UTC().Format("20060102")))
+		if end != nil {
+			sb.WriteString(icsLine("DTEND;VALUE=DATE", end.UTC().Format("20060102")))
+		}
+		return
 	}
-
-	now := time.Now()
-	windowStart := now.AddDate(-1, 0, 0)
-	windowEnd := now.AddDate(2, 0, 0)
-
-	var events []store.CalendarEvent
-	for _, comp := range cal.Children {
-		if comp.Name != ical.CompEvent {
-			continue
-		}
-		summaryProp := comp.Props.Get(ical.PropSummary)
-		if summaryProp == nil {
-			continue
-		}
-		title := summaryProp.Value
-
-		dtStartProp := comp.Props.Get(ical.PropDateTimeStart)
-		if dtStartProp == nil {
-			continue
-		}
-		dtEndProp := comp.Props.Get(ical.PropDateTimeEnd)
-
-		allDay := !strings.Contains(dtStartProp.Value, "T")
-
-		dtStart, err := dtStartProp.DateTime(time.UTC)
-		if err != nil {
-			continue
-		}
-		var dtEnd time.Time
-		if dtEndProp != nil {
-			dtEnd, _ = dtEndProp.DateTime(time.UTC)
-		}
-
-		buildEvt := func(start, end time.Time) store.CalendarEvent {
-			evt := store.CalendarEvent{Title: title, AllDay: allDay, StartTime: start}
-			if !end.IsZero() {
-				evt.EndTime = &end
-			}
-			if p := comp.Props.Get(ical.PropDescription); p != nil && p.Value != "" {
-				s := p.Value
-				evt.Description = &s
-			}
-			if p := comp.Props.Get(ical.PropLocation); p != nil && p.Value != "" {
-				s := p.Value
-				evt.Location = &s
-			}
-			if p := comp.Props.Get(ical.PropURL); p != nil && p.Value != "" {
-				s := p.Value
-				evt.URL = &s
-			}
-			return evt
-		}
-
-		rruleProp := comp.Props.Get(ical.PropRecurrenceRule)
-		if rruleProp != nil {
-			opt, err := rrule.StrToROption(rruleProp.Value)
-			if err != nil {
-				continue
-			}
-			opt.Dtstart = dtStart
-			r, err := rrule.NewRRule(*opt)
-			if err != nil {
-				continue
-			}
-			set := &rrule.Set{}
-			set.RRule(r)
-			for _, exProp := range comp.Props[ical.PropExceptionDates] {
-				if exTime, err := exProp.DateTime(time.UTC); err == nil {
-					set.ExDate(exTime)
-				}
-			}
-			duration := dtEnd.Sub(dtStart)
-			for _, occ := range set.Between(windowStart, windowEnd, true) {
-				occEnd := occ.Add(duration)
-				events = append(events, buildEvt(occ, occEnd))
-			}
-		} else {
-			events = append(events, buildEvt(dtStart, dtEnd))
-		}
+	sb.WriteString(icsLine("DTSTART", start.UTC().Format("20060102T150405Z")))
+	if end != nil {
+		sb.WriteString(icsLine("DTEND", end.UTC().Format("20060102T150405Z")))
 	}
-	return events, nil
 }
 
 // icsLine formats a single iCalendar property line with CRLF termination.

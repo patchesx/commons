@@ -1,13 +1,17 @@
 package adminui
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"commons/permissions"
 	"commons/store"
+	"commons/util"
 	"commons/web"
 	admintempl "commons/web/templ"
 )
@@ -199,6 +203,16 @@ func (d Deps) ReportIssueSubmit() http.HandlerFunc {
 	}
 }
 
+// nextOccurrences returns the next N expanded occurrences across all calendars
+// (within a 14-day horizon).
+func nextOccurrences(ctx context.Context, pool *pgxpool.Pool, n int) []store.EventOccurrence {
+	occs, err := store.ListUpcomingCalendarOccurrences(ctx, pool, time.Now(), time.Now().AddDate(0, 0, 14))
+	if err != nil || len(occs) <= n {
+		return occs
+	}
+	return occs[:n]
+}
+
 func (d Deps) PortalHome() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -208,7 +222,7 @@ func (d Deps) PortalHome() http.HandlerFunc {
 			displayName = u.DisplayName
 		}
 		links, _ := store.ListActiveQuickLinks(ctx, d.Pool)
-		events, _ := store.ListUpcomingCalendarEvents(ctx, d.Pool, 3)
+		events := nextOccurrences(ctx, d.Pool, 3)
 		perms, _ := store.GetUserPermissions(ctx, d.Pool, userID)
 		unread, _ := store.CountUnread(ctx, d.Pool, userID)
 		announcement, _ := store.GetServiceConfig(ctx, d.Pool, "bot", "announcement", d.EncKey)
@@ -237,7 +251,7 @@ func (d Deps) RootPage() http.HandlerFunc {
 			displayName = u.DisplayName
 		}
 		links, _ := store.ListActiveQuickLinks(ctx, d.Pool)
-		events, _ := store.ListUpcomingCalendarEvents(ctx, d.Pool, 3)
+		events := nextOccurrences(ctx, d.Pool, 3)
 		perms, _ := store.GetUserPermissions(ctx, d.Pool, userID)
 		unread, _ := store.CountUnread(ctx, d.Pool, userID)
 		announcement, _ := store.GetServiceConfig(ctx, d.Pool, "bot", "announcement", d.EncKey)
@@ -255,14 +269,17 @@ func (d Deps) RootPage() http.HandlerFunc {
 func (d Deps) CalendarEventsFragment() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		all, _ := store.ListUpcomingCalendarEvents(ctx, d.Pool, 0)
-		cutoff := time.Now().AddDate(0, 0, 14)
-		var events []store.CalendarEvent
-		for _, e := range all {
-			if e.StartTime.Before(cutoff) {
-				events = append(events, e)
-			}
+		now := time.Now()
+		loc, err := time.LoadLocation(util.DefaultTimezone(ctx, d.Pool, d.EncKey))
+		if err != nil || loc == nil {
+			loc = time.UTC
 		}
-		admintempl.CalendarEventsFragment(events).Render(ctx, w)
+		events, err := store.ListUpcomingCalendarOccurrences(ctx, d.Pool, now, now.AddDate(0, 0, 14))
+		if err != nil {
+			FragmentError(w, r, "failed to load events")
+			return
+		}
+		colors, _ := store.CalendarColorMap(ctx, d.Pool)
+		admintempl.CalendarEventsFragment(events, colors, loc).Render(ctx, w)
 	}
 }

@@ -277,10 +277,10 @@ type ActionCondition struct {
 // RetryConfig configures per-action retry behavior.
 // nil means no retry (default).
 type RetryConfig struct {
-	MaxAttempts  int    `json:"max_attempts"`           // total attempts including the first
-	Backoff      string `json:"backoff"`                // "fixed" or "exponential"
-	InitialDelay string `json:"initial_delay"`          // e.g. "5s"
-	MaxDelay     string `json:"max_delay"`              // e.g. "60s"; caps exponential growth
+	MaxAttempts  int    `json:"max_attempts"`  // total attempts including the first
+	Backoff      string `json:"backoff"`       // "fixed" or "exponential"
+	InitialDelay string `json:"initial_delay"` // e.g. "5s"
+	MaxDelay     string `json:"max_delay"`     // e.g. "60s"; caps exponential growth
 }
 
 func runOnOrDefault(s string) string {
