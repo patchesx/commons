@@ -51,6 +51,15 @@ func adminNavGroups() []SidebarGroup {
 				{"/admin/calendars", "Calendars", ""},
 			},
 		},
+		{
+			Label: "Inventory",
+			Items: []SidebarItem{
+				{"/admin/inventory", "Items", ""},
+				{"/admin/inventory/grid", "Grid", ""},
+				{"/admin/inventory/fields", "Custom Fields", ""},
+				{"/admin/inventory/claims", "Unmatched Claims", "/admin/fragments/inventory/claims-count"},
+			},
+		},
 	}
 	if len(extraNavItems) > 0 {
 		groups = append(groups, SidebarGroup{Label: "Plugins", Items: extraNavItems})

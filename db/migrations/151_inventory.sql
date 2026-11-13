@@ -91,16 +91,14 @@ INSERT INTO config_schema (service, key, label, description, sensitive, required
 VALUES
   ('inventory', 'default_grace_days',         'Default Verification Grace (days)',  'Days after a verification reminder before inventory admins are alerted that possession is unconfirmed. Items can override this.', FALSE, FALSE),
   ('inventory', 'claim_rate_limit_per_hour',  'Web Claim Rate Limit (per hour)',     'Maximum claim form submissions per IP address per hour on the public inventory page.',                                              FALSE, FALSE),
-  ('jobs',      'inventory_verify_enabled',          'Inventory Verification Reminders',          'Send DM reminders asking holders to confirm they still have their items.', FALSE, FALSE),
-  ('jobs',      'inventory_verify_interval_minutes', 'Inventory Verification Interval (minutes)', 'How often to check for items due for verification.',                       FALSE, FALSE)
+  ('jobs',      'inventory_verify_enabled',          'Inventory Verification Reminders',          'Send DM reminders asking holders to confirm they still have their items. The schedule is on the Triggers page.', FALSE, FALSE)
 ON CONFLICT (service, key) DO NOTHING;
 
 INSERT INTO config_store (service, key, value, sensitive)
 VALUES
   ('inventory', 'default_grace_days',                 '5',    FALSE),
   ('inventory', 'claim_rate_limit_per_hour',          '10',   FALSE),
-  ('jobs',      'inventory_verify_enabled',           'true', FALSE),
-  ('jobs',      'inventory_verify_interval_minutes',  '1440', FALSE)
+  ('jobs',      'inventory_verify_enabled',           'true', FALSE)
 ON CONFLICT (service, key) DO NOTHING;
 
 -- ---------------------------------------------------------------------------

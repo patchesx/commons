@@ -894,6 +894,48 @@ func handleBlockAction(ctx context.Context, w http.ResponseWriter, pool *pgxpool
 		}
 		w.WriteHeader(http.StatusOK)
 
+	case ActionOpenInventory:
+		handleOpenInventory(ctx, w, pool, client, payload)
+
+	case ActionInventoryCodeInput:
+		handleInventoryCodeInput(ctx, w, pool, client, payload, action.Value)
+
+	case ActionInventoryClaim:
+		handleInventoryClaim(ctx, w, pool, client, payload, action.Value)
+
+	case ActionInventoryVerify:
+		handleInventoryVerify(ctx, w, pool, client, payload, action.Value)
+
+	case ActionInventoryHandOff:
+		handleInventoryHandOff(ctx, w, pool, client, payload, action.Value)
+
+	case ActionInventoryHeldPrev, ActionInventoryHeldNext:
+		handleInventoryHeldPage(ctx, w, pool, client, payload, action.Value)
+
+	case ActionInventoryReminderYes:
+		handleInventoryReminderYes(ctx, w, pool, client, payload, action.Value)
+
+	case ActionInventoryReminderNo:
+		handleInventoryReminderNo(ctx, w, pool, client, payload, action.Value)
+
+	case ActionInventoryAdminVerify:
+		handleInventoryAdminVerify(ctx, w, pool, client, payload, action.Value)
+
+	case ActionInventoryAdminReassign:
+		handleInventoryAdminReassign(ctx, w, pool, client, payload, action.Value)
+
+	case ActionInventoryAdminRevert:
+		handleInventoryAdminRevert(ctx, w, pool, client, payload, action.Value)
+
+	case ActionInventoryClaimLink:
+		handleInventoryClaimLinkOpen(ctx, w, pool, client, payload, action.Value)
+
+	case ActionInventoryBrowseOpen:
+		handleOpenInventoryBrowse(ctx, w, pool, client, payload)
+
+	case ActionInventoryBrowseSearch, ActionInventoryBrowseFilter, ActionInventoryBrowsePrev, ActionInventoryBrowseNext:
+		handleInventoryBrowseUpdate(ctx, w, pool, client, payload, action.ActionID, action.Value)
+
 	case ActionRefreshHome:
 		go Publish(context.Background(), pool, encKey, client, payload.User.ID)
 		w.WriteHeader(http.StatusOK)
@@ -1021,6 +1063,15 @@ func handleViewSubmission(ctx context.Context, w http.ResponseWriter, pool *pgxp
 	case ModalIDLibraryBrowse, ModalIDLibraryMyBooks:
 		// Read-only modals — nothing to process on submit.
 		w.WriteHeader(http.StatusOK)
+
+	case ModalIDInventoryHandOff:
+		handleInventoryHandOffSubmit(ctx, w, pool, client, payload)
+
+	case ModalIDInventoryReassign:
+		handleInventoryReassignSubmit(ctx, w, pool, client, payload)
+
+	case ModalIDInventoryClaimLink:
+		handleInventoryClaimLinkSubmit(ctx, w, pool, client, payload)
 
 	case ModalIDMyCalendar:
 		actor, err := store.GetUserByExternalID(ctx, pool, "slack", payload.User.ID)

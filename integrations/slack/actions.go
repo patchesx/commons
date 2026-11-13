@@ -181,6 +181,12 @@ func dispatchEvent(ctx context.Context, pool *pgxpool.Pool, encKey []byte, body 
 		if userID := evt.UserID(); evt.Tab == "home" && userID != "" && client != nil {
 			go Publish(context.Background(), pool, encKey, client, userID)
 		}
+
+	case "message":
+		// Direct messages to the app are programmatic commands (see dm_commands.go).
+		if client != nil {
+			go handleDirectMessage(context.Background(), pool, encKey, client, evt)
+		}
 	}
 }
 

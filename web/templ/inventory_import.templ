@@ -1,0 +1,246 @@
+package admintempl
+
+import (
+	"strconv"
+	"strings"
+
+	"commons/store"
+)
+
+// maxImportIssuesShown keeps a badly broken file from producing a page-long list.
+const maxImportIssuesShown = 100
+
+// InventoryImportPreviewData backs the preview step: what the file would do, and what is wrong with it.
+type InventoryImportPreviewData struct {
+	FileName      string
+	Creates       int
+	Updates       int
+	HolderChanges int
+	NewFields     []store.InventoryImportField
+	Errors        []store.InventoryImportIssue
+	Warnings      []store.InventoryImportIssue
+	Rows          []store.InventoryImportPlanRow // the first rows, for a sample
+	MoreRows      int
+	Payload       string // the file, base64, carried to the confirm step
+	Token         string // one-time token for the confirm step
+}
+
+func invImportLine(line int) string {
+	if line == 0 {
+		return "File"
+	}
+	return "Line " + strconv.Itoa(line)
+}
+
+func invImportMore(total int) int {
+	return max(total-maxImportIssuesShown, 0)
+}
+
+func invImportAction(r store.InventoryImportPlanRow) string {
+	if r.ItemID == "" {
+		return "Create"
+	}
+	return "Update"
+}
+
+func invImportAccessories(r store.InventoryImportPlanRow) string {
+	if len(r.Accessories) == 0 {
+		return "—"
+	}
+	return strings.Join(r.Accessories, ", ")
+}
+
+func invImportIssues(issues []store.InventoryImportIssue) []store.InventoryImportIssue {
+	if len(issues) > maxImportIssuesShown {
+		return issues[:maxImportIssuesShown]
+	}
+	return issues
+}
+
+templ InventoryImportPage(errMsg string, canAssignHolders bool) {
+	@Layout("Import Inventory", "/admin/inventory/import") {
+		<div>
+			<h1 class="title is-4 mb-3">Import Inventory</h1>
+			<div class="content is-size-6 mb-4">
+				<p>Upload a CSV to add items or update existing ones. You'll see a preview of what it will do before anything is saved.</p>
+				<ul>
+					<li><strong>Name</strong> is required on every row.</li>
+					<li><strong>Code</strong>: a row whose code matches an item updates it. A blank code creates a new item with a generated code. A code that doesn't exist yet creates the item with that code.</li>
+					<li><strong>Location</strong>, <strong>Description</strong>, and <strong>Verify every (days)</strong> are optional. A new item verifies every 7 days unless you say otherwise.</li>
+					<li><strong>Accessories</strong>: the parts of an item, separated by commas, for example <code>"Speaker, Stand, Power cable"</code> (quote the cell if your spreadsheet doesn't, but most software like Google Sheets should do that when saved as CSV). Accessories not already on the item are added; existing ones are never removed. Accessories appear only on the item's detail page.</li>
+					<li>Any other column heading becomes a custom field with that name, and its values are imported as text. Headings that match an existing field use it. A dropdown field accepts only its listed choices (any capitalization), so a row with another value is flagged in the preview.</li>
+					if canAssignHolders {
+						<li><strong>Holder email</strong>: a member with that email becomes the holder. No one is messaged. An email that matches no member leaves the holder as it was.</li>
+					} else {
+						<li><strong>Holder email</strong> is ignored unless you are an inventory admin.</li>
+					}
+					<li>Blank cells leave existing values as they are. An import never clears anything.</li>
+				</ul>
+				<p>
+					You can import a file you exported from the <a href="/admin/inventory/grid">grid</a>; its extra columns are ignored.
+					In a spreadsheet, save as <em>CSV UTF-8</em>. Files can be up to 2 MB and 5,000 rows.
+					<a href="/admin/inventory/import-template.csv">Download a template</a>.
+				</p>
+			</div>
+			@AlertBox(errMsg, "error")
+			<form method="post" action="/admin/inventory/import" enctype="multipart/form-data" class="box">
+				<div class="field">
+					<label for="import-file" class="label is-small">CSV file</label>
+					<div class="control">
+						<input id="import-file" type="file" name="file" accept=".csv,text/csv" required class="input is-small"/>
+					</div>
+				</div>
+				<button type="submit" class="button is-primary is-small">Preview import</button>
+			</form>
+		</div>
+	}
+}
+
+templ InventoryImportPreview(d InventoryImportPreviewData) {
+	@Layout("Import Preview", "/admin/inventory/import") {
+		<div>
+			<h1 class="title is-4 mb-3">Import preview</h1>
+			if d.FileName != "" {
+				<p class="is-size-7 has-text-grey mb-3">{ d.FileName }</p>
+			}
+			if len(d.Errors) > 0 {
+				<div class="notification is-danger is-light" role="alert">
+					<p class="has-text-weight-semibold mb-2">Nothing was imported. Fix these problems and upload the file again.</p>
+					<ul>
+						for _, e := range invImportIssues(d.Errors) {
+							<li><strong>{ invImportLine(e.Line) }:</strong> { e.Message }</li>
+						}
+					</ul>
+					if invImportMore(len(d.Errors)) > 0 {
+						<p class="is-size-7 mt-2">…and { strconv.Itoa(invImportMore(len(d.Errors))) } more.</p>
+					}
+				</div>
+			} else {
+				<div class="notification is-info is-light">
+					<strong>{ strconv.Itoa(d.Creates) }</strong> to create,
+					<strong>{ strconv.Itoa(d.Updates) }</strong> to update,
+					<strong>{ strconv.Itoa(d.HolderChanges) }</strong> holders to assign,
+					<strong>{ strconv.Itoa(len(d.NewFields)) }</strong> new custom fields.
+				</div>
+			}
+			if len(d.NewFields) > 0 {
+				<p class="mb-3 is-size-7">
+					New custom fields that will be created:
+					for i, f := range d.NewFields {
+						if i > 0 {
+							,&nbsp;
+						}
+						<strong>{ f.Label }</strong>
+					}
+				</p>
+			}
+			if len(d.Warnings) > 0 {
+				<div class="notification is-warning is-light">
+					<p class="has-text-weight-semibold mb-2">Worth a look</p>
+					<ul>
+						for _, w := range invImportIssues(d.Warnings) {
+							<li><strong>{ invImportLine(w.Line) }:</strong> { w.Message }</li>
+						}
+					</ul>
+					if invImportMore(len(d.Warnings)) > 0 {
+						<p class="is-size-7 mt-2">…and { strconv.Itoa(invImportMore(len(d.Warnings))) } more.</p>
+					}
+				</div>
+			}
+			if len(d.Errors) == 0 && len(d.Rows) == 0 {
+				<p class="mb-4">The file has no rows to import.</p>
+			}
+			if len(d.Rows) > 0 {
+				<div class="card mb-4">
+					<div class="table-container">
+						<table class="table is-fullwidth is-narrow mb-0">
+							<thead>
+								<tr>
+									<th>Line</th>
+									<th>Action</th>
+									<th>Name</th>
+									<th>Code</th>
+									<th>Holder email</th>
+									<th>Accessories</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, r := range d.Rows {
+									<tr>
+										<td class="is-size-7">{ strconv.Itoa(r.Line) }</td>
+										<td class="is-size-7">{ invImportAction(r) }</td>
+										<td>{ r.Name }</td>
+										<td class="is-family-monospace is-size-7">
+											if r.Code == "" {
+												<span class="has-text-grey-light">generated</span>
+											} else {
+												{ store.FormatInventoryCode(r.Code) }
+											}
+										</td>
+										<td class="is-size-7">{ invHolder(r.HolderEmail) }</td>
+										<td class="is-size-7">{ invImportAccessories(r) }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+					if d.MoreRows > 0 {
+						<p class="is-size-7 has-text-grey p-3">…and { strconv.Itoa(d.MoreRows) } more rows.</p>
+					}
+				</div>
+			}
+			<div class="buttons">
+				if len(d.Errors) == 0 && len(d.Rows) > 0 {
+					<form method="post" action="/admin/inventory/import/confirm" onsubmit="this.querySelector('button').disabled = true">
+						<input type="hidden" name="csv_b64" value={ d.Payload }/>
+						<input type="hidden" name="token" value={ d.Token }/>
+						<button type="submit" class="button is-primary is-small">Import { strconv.Itoa(len(d.Rows) + d.MoreRows) } rows</button>
+					</form>
+				}
+				<a href="/admin/inventory/import" class="button is-small">Choose another file</a>
+			</div>
+		</div>
+	}
+}
+
+templ InventoryImportResultPage(r store.InventoryImportResult) {
+	@Layout("Import Complete", "/admin/inventory/import") {
+		<div>
+			<h1 class="title is-4 mb-3">Import complete</h1>
+			<div class="notification is-success is-light" role="status">
+				<strong>{ strconv.Itoa(r.Created) }</strong> created,
+				<strong>{ strconv.Itoa(r.Updated) }</strong> updated,
+				<strong>{ strconv.Itoa(r.HoldersSet) }</strong> holders assigned,
+				<strong>{ strconv.Itoa(r.FieldsCreated) }</strong> custom fields created.
+			</div>
+			if len(r.CreatedItems) > 0 {
+				<p class="mb-2">New items, with the codes to put on their labels:</p>
+				<div class="card mb-4">
+					<div class="table-container">
+						<table class="table is-fullwidth is-narrow mb-0">
+							<thead>
+								<tr>
+									<th>Name</th>
+									<th>Code</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, c := range r.CreatedItems {
+									<tr>
+										<td>{ c.Name }</td>
+										<td class="is-family-monospace">{ store.FormatInventoryCode(c.Code) }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				</div>
+			}
+			<div class="buttons">
+				<a href="/admin/inventory/grid" class="button is-primary is-small">View the grid</a>
+				<a href="/admin/inventory" class="button is-small">Items</a>
+				<a href="/admin/inventory/import" class="button is-small">Import another file</a>
+			</div>
+		</div>
+	}
+}

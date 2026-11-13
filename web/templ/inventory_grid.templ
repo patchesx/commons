@@ -1,0 +1,343 @@
+package admintempl
+
+import (
+	"net/url"
+	"strconv"
+
+	"commons/store"
+)
+
+// InventoryGridData backs the grid page and its table fragment.
+type InventoryGridData struct {
+	Rows            []store.InventoryGridRow
+	Fields          []store.InventoryFieldDefinition // active custom fields, in display order
+	Total           int
+	Page            int
+	TotalPages      int
+	Search          string
+	IncludeArchived bool
+	PendingOnly     bool
+	Sort            string
+	Desc            bool
+	CanManage       bool
+}
+
+type invGridColumn struct {
+	Key   string // name, code, location, holder, verified, or field:<key>
+	Label string
+}
+
+func invGridColumns(fields []store.InventoryFieldDefinition) []invGridColumn {
+	cols := []invGridColumn{
+		{"name", "Name"}, {"code", "Code"}, {"location", "Location"}, {"holder", "Holder"}, {"verified", "Last verified"},
+	}
+	for _, f := range fields {
+		cols = append(cols, invGridColumn{"field:" + f.Key, f.Label})
+	}
+	return cols
+}
+
+// invGridURL is the table fragment URL for a view of the grid.
+func invGridURL(d InventoryGridData, sort string, desc bool, page int) string {
+	v := url.Values{}
+	if d.Search != "" {
+		v.Set("q", d.Search)
+	}
+	if d.IncludeArchived {
+		v.Set("archived", "1")
+	}
+	if d.PendingOnly {
+		v.Set("pending", "1")
+	}
+	v.Set("sort", sort)
+	if desc {
+		v.Set("dir", "desc")
+	}
+	v.Set("page", strconv.Itoa(page))
+	return "/admin/fragments/inventory-grid?" + v.Encode()
+}
+
+// invGridSortURL sorts by a column, reversing the order if the grid is already sorted by it.
+func invGridSortURL(d InventoryGridData, key string) string {
+	return invGridURL(d, key, d.Sort == key && !d.Desc, 1)
+}
+
+func invGridSortMark(d InventoryGridData, key string) string {
+	if d.Sort != key {
+		return ""
+	}
+	if d.Desc {
+		return " ▼"
+	}
+	return " ▲"
+}
+
+func invGridDir(desc bool) string {
+	if desc {
+		return "desc"
+	}
+	return "asc"
+}
+
+func invGridRowClass(row store.InventoryGridRow) string {
+	if row.ArchivedAt != nil {
+		return "has-text-grey"
+	}
+	return ""
+}
+
+// invGridCellID is a stable DOM id for a cell, safe to use as an HTML id and in a selector.
+func invGridCellID(itemID, col string) string {
+	safe := make([]rune, 0, len(col))
+	for _, r := range col {
+		if r == '_' || r == '-' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			safe = append(safe, r)
+		} else {
+			safe = append(safe, '_')
+		}
+	}
+	return "cell-" + itemID + "-" + string(safe)
+}
+
+func invGridCellPath(itemID, col string) string {
+	return "/admin/fragments/inventory-grid/" + itemID + "/cell/" + url.PathEscape(col)
+}
+
+// InventoryGridCellText is the editable text of a cell.
+func InventoryGridCellText(row store.InventoryGridRow, col string) string {
+	switch col {
+	case "name":
+		return row.Name
+	case "location":
+		return invStr(row.Location)
+	}
+	if key, ok := cutFieldPrefix(col); ok {
+		return row.Metadata[key]
+	}
+	return ""
+}
+
+func cutFieldPrefix(col string) (string, bool) {
+	const prefix = "field:"
+	if len(col) > len(prefix) && col[:len(prefix)] == prefix {
+		return col[len(prefix):], true
+	}
+	return "", false
+}
+
+templ InventoryGridPage(d InventoryGridData) {
+	@Layout("Inventory Grid", "/admin/inventory/grid") {
+		<div>
+			<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+				<h1 class="title is-4 mb-0">Inventory Grid</h1>
+				<div class="buttons mb-0">
+					if d.CanManage {
+						<a href="/admin/inventory/import" class="button is-small is-outlined is-link">Import CSV</a>
+					}
+					<a
+						id="grid-export"
+						href="/admin/inventory/grid.csv"
+						onclick="var p = new URLSearchParams(new FormData(document.getElementById('grid-filters'))); p.set('sort', document.getElementById('grid-sort').value); p.set('dir', document.getElementById('grid-dir').value); this.href = '/admin/inventory/grid.csv?' + p.toString();"
+						class="button is-small is-outlined is-link"
+					>Export CSV</a>
+				</div>
+			</div>
+			@PageHelp() {
+				Every item and who holds it, one row each, with your custom fields as columns. Click a column heading to sort, and use the search box to filter by name, code, location, holder, or any field. If you can manage inventory, click a Name, Location, or custom field cell to edit it in place. The CSV export contains everything that matches the current search, sort, and filters.
+			}
+			<form id="grid-filters" action="/admin/inventory/grid" method="get" onsubmit="return false" class="is-flex is-align-items-center is-flex-wrap-wrap mb-3" style="gap: 0.75rem">
+				<input
+					id="grid-q"
+					type="search"
+					name="q"
+					value={ d.Search }
+					placeholder="Search items, holders, fields…"
+					aria-label="Search the grid"
+					hx-get="/admin/fragments/inventory-grid"
+					hx-trigger="input changed delay:300ms, search"
+					hx-target="#inventory-grid"
+					hx-swap="outerHTML"
+					hx-include="#grid-filters, #grid-sort, #grid-dir"
+					class="input is-small"
+					style="max-width: 20rem"
+				/>
+				<label class="checkbox is-size-7">
+					<input
+						type="checkbox"
+						name="archived"
+						value="1"
+						checked?={ d.IncludeArchived }
+						hx-get="/admin/fragments/inventory-grid"
+						hx-trigger="change"
+						hx-target="#inventory-grid"
+						hx-swap="outerHTML"
+						hx-include="#grid-filters, #grid-sort, #grid-dir"
+					/>
+					Show archived
+				</label>
+				<label class="checkbox is-size-7">
+					<input
+						type="checkbox"
+						name="pending"
+						value="1"
+						checked?={ d.PendingOnly }
+						hx-get="/admin/fragments/inventory-grid"
+						hx-trigger="change"
+						hx-target="#inventory-grid"
+						hx-swap="outerHTML"
+						hx-include="#grid-filters, #grid-sort, #grid-dir"
+					/>
+					Claim pending only
+				</label>
+			</form>
+			@InventoryGrid(d)
+		</div>
+	}
+}
+
+templ InventoryGrid(d InventoryGridData) {
+	<div id="inventory-grid">
+		<input type="hidden" id="grid-sort" name="sort" value={ d.Sort }/>
+		<input type="hidden" id="grid-dir" name="dir" value={ invGridDir(d.Desc) }/>
+		<div class="card mb-4">
+			<div class="table-container">
+				<table class="table is-fullwidth is-hoverable is-narrow mb-0">
+					<thead>
+						<tr>
+							for _, col := range invGridColumns(d.Fields) {
+								<th>
+									<button
+										hx-get={ invGridSortURL(d, col.Key) }
+										hx-target="#inventory-grid"
+										hx-swap="outerHTML"
+										class="button is-ghost is-small p-0 has-text-weight-semibold"
+										style="text-decoration: none; height: auto"
+									>{ col.Label }{ invGridSortMark(d, col.Key) }</button>
+								</th>
+							}
+						</tr>
+					</thead>
+					<tbody>
+						if len(d.Rows) == 0 {
+							<tr>
+								<td colspan={ strconv.Itoa(len(invGridColumns(d.Fields))) } class="has-text-centered py-5">
+									@EmptyState("No items match.")
+								</td>
+							</tr>
+						}
+						for _, row := range d.Rows {
+							<tr class={ invGridRowClass(row) }>
+								@InventoryGridCell(row, "name", d.CanManage)
+								<td class="is-family-monospace is-size-7">{ store.FormatInventoryCode(row.Code) }</td>
+								@InventoryGridCell(row, "location", d.CanManage)
+								<td class="is-size-7">{ invHolder(row.HolderName) }</td>
+								<td class="is-size-7 has-text-grey" style="white-space: nowrap">{ invDate(row.LastVerifiedAt) }</td>
+								for _, f := range d.Fields {
+									@InventoryGridCell(row, "field:"+f.Key, d.CanManage)
+								}
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+			@PaginationNav(d.Page, d.TotalPages, invGridURL(d, d.Sort, d.Desc, d.Page-1), invGridURL(d, d.Sort, d.Desc, d.Page+1), "inventory-grid") {
+				<span class="is-size-7 has-text-grey">{ strconv.Itoa(d.Total) } items</span>
+			}
+		</div>
+	</div>
+}
+
+// InventoryGridCell is one editable cell. For people who can manage inventory, clicking it swaps in an editor
+// (links inside the cell still navigate).
+templ InventoryGridCell(row store.InventoryGridRow, col string, canEdit bool) {
+	if canEdit && row.ArchivedAt == nil {
+		<td
+			id={ invGridCellID(row.ID, col) }
+			hx-get={ invGridCellPath(row.ID, col) + "/edit" }
+			hx-trigger="click[!event.target.closest('a')]"
+			hx-target="this"
+			hx-swap="outerHTML"
+			title="Click to edit"
+			style="cursor: text"
+		>
+			@invGridCellContent(row, col)
+		</td>
+	} else {
+		<td id={ invGridCellID(row.ID, col) }>
+			@invGridCellContent(row, col)
+		</td>
+	}
+}
+
+templ invGridCellContent(row store.InventoryGridRow, col string) {
+	if col == "name" {
+		<a href={ templ.URL("/admin/inventory/" + row.ID) } class="has-text-weight-semibold has-text-link">{ row.Name }</a>
+		if row.ArchivedAt != nil {
+			<span class="tag is-light is-small ml-1">Archived</span>
+		}
+		if row.ClaimPending {
+			<span class="tag is-warning is-light is-small ml-1" title="An unmatched claim is waiting for an admin">Claim pending</span>
+		}
+	} else if InventoryGridCellText(row, col) == "" {
+		<span class="has-text-grey-light">—</span>
+	} else {
+		{ InventoryGridCellText(row, col) }
+	}
+}
+
+// InventoryGridCellEditor replaces a cell with a one-line text editor. Enter or the check saves; Escape or the
+// cross puts the cell back.
+templ InventoryGridCellEditor(row store.InventoryGridRow, col, label, value, errMsg string, choices []string) {
+	<td id={ invGridCellID(row.ID, col) } class="p-1">
+		<form
+			hx-patch={ invGridCellPath(row.ID, col) }
+			hx-target="closest td"
+			hx-swap="outerHTML"
+			class="is-flex"
+			style="gap: 0.25rem"
+		>
+			if len(choices) > 0 {
+				<select
+					name="value"
+					aria-label={ label + " for " + row.Name }
+					hx-patch={ invGridCellPath(row.ID, col) }
+					hx-trigger="change"
+					hx-target="closest td"
+					hx-swap="outerHTML"
+					class="select is-small"
+				>
+					<option value="" selected?={ value == "" }>—</option>
+					for _, c := range choices {
+						<option value={ c } selected?={ c == value }>{ c }</option>
+					}
+				</select>
+			} else {
+				<input
+					type="text"
+					name="value"
+					value={ value }
+					aria-label={ label + " for " + row.Name }
+					autofocus
+					maxlength="2000"
+					hx-get={ invGridCellPath(row.ID, col) }
+					hx-trigger="keyup[key=='Escape']"
+					hx-target="closest td"
+					hx-swap="outerHTML"
+					class="input is-small"
+				/>
+			}
+			<button type="submit" class="button is-small is-primary" aria-label="Save">✓</button>
+			<button
+				type="button"
+				hx-get={ invGridCellPath(row.ID, col) }
+				hx-target="closest td"
+				hx-swap="outerHTML"
+				class="button is-small"
+				aria-label="Cancel"
+			>✕</button>
+		</form>
+		if errMsg != "" {
+			<p class="help is-danger">{ errMsg }</p>
+		}
+	</td>
+}

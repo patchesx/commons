@@ -1,0 +1,697 @@
+package admintempl
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"commons/store"
+)
+
+// InventoryRow is one item in the list with its holder's display name resolved.
+type InventoryRow struct {
+	Item       store.InventoryItem
+	HolderName string
+}
+
+// InventoryFieldValue is a labeled custom field value shown read-only on the detail page.
+type InventoryFieldValue struct {
+	Label string
+	Value string
+}
+
+// InventoryEventRow is one custody history row with names resolved and a readable label.
+type InventoryEventRow struct {
+	Event        store.CustodyEvent
+	Label        string
+	HolderName   string
+	PreviousName string
+}
+
+// InventoryDetailData backs the item detail page.
+type InventoryDetailData struct {
+	Item           store.InventoryItem
+	HolderName     string
+	GraceDays      int
+	GraceIsDefault bool
+	Fields         []InventoryFieldValue
+	Accessories    []store.InventoryAccessory
+	Events         []InventoryEventRow
+	CanManage      bool
+}
+
+// InventoryLabel is one printable label: the formatted code above an inline SVG QR code, the item name below.
+type InventoryLabel struct {
+	Code string
+	Name string
+	SVG  string
+}
+
+// Label text and padding scale with the label width (inches) so one size setting drives the whole label.
+func invLabelCSS(width float64) string {
+	return fmt.Sprintf("width:%.2fin;padding:%.3fin", width, width*0.06)
+}
+
+func invCodeCSS(width float64) string {
+	return fmt.Sprintf("font-size:%.3fin;margin-bottom:%.3fin", width*0.15, width*0.04)
+}
+
+func invNameCSS(width float64) string {
+	return fmt.Sprintf("font-size:%.3fin;margin-top:%.3fin", width*0.075, width*0.04)
+}
+
+func invWidthValue(width float64) string {
+	return strconv.FormatFloat(width, 'f', -1, 64)
+}
+
+// invFieldChoices is the text a field's choices box starts with: its list, or for a text field the values already in use.
+func invFieldChoices(d store.InventoryFieldDefinition, suggested map[string][]string) []string {
+	if d.IsSelect() {
+		return d.Options
+	}
+	return suggested[d.Key]
+}
+
+func invLines(s []string) string {
+	return strings.Join(s, "\n")
+}
+
+func invDate(t *time.Time) string {
+	if t == nil {
+		return "Never"
+	}
+	return t.Format("Jan 2, 2006")
+}
+
+func invDateTime(t time.Time) string {
+	return t.Format("Jan 2, 2006 3:04 PM")
+}
+
+func invStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func invInt(n *int) string {
+	if n == nil {
+		return ""
+	}
+	return strconv.Itoa(*n)
+}
+
+func invHolder(name string) string {
+	if name == "" {
+		return "—"
+	}
+	return name
+}
+
+templ InventoryPage(rows []InventoryRow, showArchived, canManage, labelsReady bool) {
+	@Layout("Inventory", "/admin/inventory") {
+		<div>
+			<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+				<h1 class="title is-4 mb-0">Inventory</h1>
+				if canManage {
+					<div class="buttons mb-0">
+						<a href="/admin/inventory/import" class="button is-small is-outlined is-link">Import CSV</a>
+						<button
+							hx-get="/admin/fragments/inventory/new-modal"
+							hx-target="#inventory-modal"
+							hx-swap="innerHTML"
+							hx-on:htmx:after-request="document.getElementById('inventory-modal').showModal()"
+							class="button is-primary is-small"
+						>+ Add item</button>
+					</div>
+				}
+			</div>
+			@PageHelp() {
+				Items tracked by the organization and who currently holds each one. Members claim items in Slack or through the QR code on the item's label. Every item has a short code; verification reminders go to the holder on the cadence set here.
+			}
+			<label class="checkbox is-size-7 mb-3">
+				<input
+					id="inv-show-archived"
+					type="checkbox"
+					name="archived"
+					value="1"
+					checked?={ showArchived }
+					hx-get="/admin/fragments/inventory-table"
+					hx-target="#inventory-table"
+					hx-swap="outerHTML"
+					hx-trigger="change"
+				/>
+				Show archived items
+			</label>
+			if canManage {
+				<form
+					id="inv-labels-form"
+					method="get"
+					action="/admin/inventory/labels"
+					target="_blank"
+					onsubmit="if (!document.querySelector('input[name=id][form=inv-labels-form]:checked')) { document.getElementById('inv-labels-help').classList.add('has-text-danger'); return false; } return true"
+					class="is-flex is-align-items-center is-flex-wrap-wrap mb-3"
+					style="gap: 0.5rem"
+				>
+					<label for="inv-label-width" class="is-size-7">Label width (inches)</label>
+					<input id="inv-label-width" type="number" name="width" min="0.75" max="6" step="0.25" value="2" disabled?={ !labelsReady } class="input is-small" style="width: 5rem"/>
+					<button type="submit" disabled?={ !labelsReady } class="button is-small is-outlined is-link">Print labels for selected items</button>
+					if labelsReady {
+						<span id="inv-labels-help" class="help m-0">Tick at least one item below first.</span>
+					} else {
+						<span id="inv-labels-help" class="help m-0 has-text-danger">QR labels need the admin URL (bot/admin_url) to be configured first.</span>
+					}
+				</form>
+			}
+			@InventoryTable(rows, canManage)
+		</div>
+		<dialog id="inventory-modal" aria-labelledby="inventory-modal-title" style="width: 100%; max-width: 28rem; max-height: 90dvh; overflow-y: auto; padding: 0; border: none; border-radius: 0.5rem"></dialog>
+	}
+}
+
+templ InventoryTable(rows []InventoryRow, canManage bool) {
+	<div id="inventory-table">
+		<div class="card mb-4">
+			<div class="table-container">
+				<table class="table is-fullwidth is-hoverable is-narrow mb-0">
+					<thead>
+						<tr>
+							if canManage {
+								<th style="width: 1%">
+									<input
+										type="checkbox"
+										aria-label="Select all items"
+										onclick="document.querySelectorAll('input[name=id][form=inv-labels-form]').forEach(function(c) { c.checked = this.checked }, this)"
+									/>
+								</th>
+							}
+							<th>Item</th>
+							<th class="is-hidden-mobile">Code</th>
+							<th>Holder</th>
+							<th class="is-hidden-mobile">Last verified</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(rows) == 0 {
+							<tr>
+								<td colspan="6" class="has-text-centered py-5">
+									@EmptyState("No inventory items yet.")
+								</td>
+							</tr>
+						}
+						for _, row := range rows {
+							<tr>
+								if canManage {
+									<td>
+										if row.Item.ArchivedAt == nil {
+											<input type="checkbox" name="id" value={ row.Item.ID } form="inv-labels-form" aria-label={ "Select " + row.Item.Name }/>
+										}
+									</td>
+								}
+								<td>
+									<div class="has-text-weight-semibold">
+										<a href={ templ.URL("/admin/inventory/" + row.Item.ID) } class="has-text-link">{ row.Item.Name }</a>
+										if row.Item.ArchivedAt != nil {
+											<span class="tag is-light is-small ml-1">Archived</span>
+										}
+									</div>
+									if row.Item.Location != nil && *row.Item.Location != "" {
+										<div class="is-size-7 has-text-grey mt-1">{ *row.Item.Location }</div>
+									}
+									<div class="is-hidden-tablet is-size-7 has-text-grey is-family-monospace mt-1">{ store.FormatInventoryCode(row.Item.Code) }</div>
+								</td>
+								<td class="is-hidden-mobile is-family-monospace is-size-7">{ store.FormatInventoryCode(row.Item.Code) }</td>
+								<td class="is-size-7">{ invHolder(row.HolderName) }</td>
+								<td class="is-hidden-mobile is-size-7 has-text-grey">{ invDate(row.Item.LastVerifiedAt) }</td>
+								<td class="has-text-right" style="white-space: nowrap">
+									<div class="buttons are-small mb-0 is-justify-content-flex-end" style="gap: 0.25rem">
+										<a href={ templ.URL("/admin/inventory/" + row.Item.ID) } class="button is-small is-outlined is-link">Details</a>
+										if canManage {
+											if row.Item.ArchivedAt == nil {
+												<button
+													hx-get={ "/admin/fragments/inventory/" + row.Item.ID + "/edit-modal" }
+													hx-target="#inventory-modal"
+													hx-swap="innerHTML"
+													hx-on:htmx:after-request="document.getElementById('inventory-modal').showModal()"
+													class="button is-small is-outlined is-link"
+												>Edit</button>
+												<span x-data="{ confirming: false }">
+													<button
+														x-show="!confirming"
+														x-on:click.stop="confirming = true"
+														class="button is-small is-outlined is-danger"
+													>Archive</button>
+													<span x-show="confirming" style="display:none">
+														<button
+															x-on:click.stop
+															hx-post={ "/admin/fragments/inventory/" + row.Item.ID + "/archive" }
+															hx-swap="none"
+															hx-on:htmx:after-request="if(event.detail.successful) { confirming = false; htmx.ajax('GET', '/admin/fragments/inventory-table' + (document.getElementById('inv-show-archived').checked ? '?archived=1' : ''), {target: '#inventory-table', swap: 'outerHTML'}) }"
+															class="button is-small is-danger"
+														>Confirm</button>
+														<button
+															x-on:click.stop="confirming = false"
+															class="button is-small"
+														>Cancel</button>
+													</span>
+												</span>
+											} else {
+												<button
+													hx-post={ "/admin/fragments/inventory/" + row.Item.ID + "/restore" }
+													hx-swap="none"
+													hx-on:htmx:after-request="if(event.detail.successful) { htmx.ajax('GET', '/admin/fragments/inventory-table' + (document.getElementById('inv-show-archived').checked ? '?archived=1' : ''), {target: '#inventory-table', swap: 'outerHTML'}) }"
+													class="button is-small is-outlined is-link"
+												>Restore</button>
+											}
+										}
+									</div>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+}
+
+templ InventoryItemModal(item store.InventoryItem, isNew, canGrace bool, errMsg string) {
+	<div class="box">
+		if isNew {
+			<h2 id="inventory-modal-title" class="title is-5 mb-4">Add item</h2>
+			<form
+				hx-post="/admin/fragments/inventory"
+				hx-target="#inventory-modal"
+				hx-swap="innerHTML"
+			>
+				@AlertBox(errMsg, "error")
+				@inventoryItemFields(item, isNew, canGrace)
+				@inventoryModalButtons("Add")
+			</form>
+		} else {
+			<h2 id="inventory-modal-title" class="title is-5 mb-4">Edit item</h2>
+			<form
+				hx-put={ "/admin/fragments/inventory/" + item.ID }
+				hx-target="#inventory-modal"
+				hx-swap="innerHTML"
+			>
+				@AlertBox(errMsg, "error")
+				@inventoryItemFields(item, isNew, canGrace)
+				@inventoryModalButtons("Save")
+			</form>
+		}
+	</div>
+}
+
+templ inventoryItemFields(item store.InventoryItem, isNew, canGrace bool) {
+	<div class="field">
+		<label for="inv-name" class="label is-small">Name <span class="has-text-danger">*</span></label>
+		<div class="control">
+			<input id="inv-name" type="text" name="name" value={ item.Name } required class="input is-small"/>
+		</div>
+	</div>
+	<div class="field">
+		<label for="inv-location" class="label is-small">Location</label>
+		<div class="control">
+			<input id="inv-location" type="text" name="location" value={ invStr(item.Location) } class="input is-small"/>
+		</div>
+	</div>
+	<div class="field">
+		<label for="inv-desc" class="label is-small">Description</label>
+		<div class="control">
+			<textarea id="inv-desc" name="description" rows="2" class="textarea is-small">{ invStr(item.Description) }</textarea>
+		</div>
+	</div>
+	<div class="field">
+		<label for="inv-verify" class="label is-small">Verify every (days)</label>
+		<div class="control">
+			<input id="inv-verify" type="number" min="1" name="verify_every_days" value={ invInt(item.VerifyEveryDays) } placeholder="No reminders" class="input is-small"/>
+		</div>
+		<p class="help">How often the holder is asked to confirm they still have the item. Leave blank for no reminders.</p>
+	</div>
+	if canGrace {
+		<div class="field">
+			<label for="inv-grace" class="label is-small">Grace period (days)</label>
+			<div class="control">
+				<input id="inv-grace" type="number" min="1" name="verify_grace_days" value={ invInt(item.VerifyGraceDays) } placeholder="Use default" class="input is-small"/>
+			</div>
+			<p class="help">Days after a reminder before inventory admins are alerted. Leave blank to use the default.</p>
+		</div>
+	}
+	if isNew {
+		<p class="help mb-3">A code for the item's label is generated automatically.</p>
+	}
+}
+
+templ inventoryModalButtons(submitLabel string) {
+	<div class="field is-grouped is-grouped-right">
+		<div class="control">
+			<button type="button" onclick="document.getElementById('inventory-modal').close()" class="button is-small">Cancel</button>
+		</div>
+		<div class="control">
+			<button type="submit" class="button is-primary is-small">{ submitLabel }</button>
+		</div>
+	</div>
+}
+
+templ InventoryDetailPage(d InventoryDetailData) {
+	@Layout(d.Item.Name, "/admin/inventory") {
+		<div>
+			<a href="/admin/inventory" class="is-size-7 has-text-grey is-block mb-3">← All items</a>
+			<div class="is-flex is-align-items-center mb-3" style="gap: 0.5rem">
+				<h1 class="title is-4 mb-0">{ d.Item.Name }</h1>
+				if d.Item.ArchivedAt != nil {
+					<span class="tag is-light">Archived</span>
+				}
+			</div>
+			if d.CanManage && d.Item.ArchivedAt == nil {
+				<div class="buttons are-small mb-3" style="gap: 0.25rem">
+					<a href={ templ.URL("/admin/inventory/" + d.Item.ID + "/qr.png") } class="button is-outlined is-link">Download QR (PNG)</a>
+					<a href={ templ.URL("/admin/inventory/labels?id=" + d.Item.ID) } target="_blank" class="button is-outlined is-link">Print label</a>
+					<span x-data="{ confirming: false }">
+						<button
+							x-show="!confirming"
+							x-on:click.stop="confirming = true"
+							class="button is-small is-outlined is-danger"
+						>Rotate code</button>
+						<span class="is-hidden is-align-items-center" :class="{ 'is-flex': confirming, 'is-hidden': !confirming }">
+							<span class="is-size-7 mr-2">Labels with the old code will stop working.</span>
+							<button
+								x-on:click.stop
+								hx-post={ "/admin/fragments/inventory/" + d.Item.ID + "/rotate-code" }
+								hx-swap="none"
+								hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
+								class="button is-small is-danger"
+							>Confirm</button>
+							<button
+								x-on:click.stop="confirming = false"
+								class="button is-small ml-1"
+							>Cancel</button>
+						</span>
+					</span>
+				</div>
+			}
+			<div class="card mb-4">
+				<div class="card-content">
+					<div class="table-container">
+						<table class="table is-fullwidth is-narrow mb-0">
+							<tbody>
+								<tr>
+									<th style="width: 30%">Code</th>
+									<td class="is-family-monospace">{ store.FormatInventoryCode(d.Item.Code) }</td>
+								</tr>
+								<tr>
+									<th>Holder</th>
+									<td>{ invHolder(d.HolderName) }</td>
+								</tr>
+								<tr>
+									<th>Location</th>
+									<td>{ invHolder(invStr(d.Item.Location)) }</td>
+								</tr>
+								<tr>
+									<th>Description</th>
+									<td>{ invHolder(invStr(d.Item.Description)) }</td>
+								</tr>
+								<tr>
+									<th>Last verified</th>
+									<td>{ invDate(d.Item.LastVerifiedAt) }</td>
+								</tr>
+								<tr>
+									<th>Verify every</th>
+									<td>
+										if d.Item.VerifyEveryDays == nil {
+											No reminders
+										} else {
+											{ strconv.Itoa(*d.Item.VerifyEveryDays) } days
+										}
+									</td>
+								</tr>
+								<tr>
+									<th>Grace period</th>
+									<td>
+										{ strconv.Itoa(d.GraceDays) } days
+										if d.GraceIsDefault {
+											<span class="has-text-grey is-size-7">(default)</span>
+										}
+									</td>
+								</tr>
+								for _, f := range d.Fields {
+									<tr>
+										<th>{ f.Label }</th>
+										<td>{ f.Value }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</div>
+			<h2 class="title is-5">Accessories</h2>
+			<div class="card mb-4">
+				<div class="card-content">
+					if len(d.Accessories) == 0 {
+						<p class="has-text-grey is-size-7">
+							No accessories.
+							if d.CanManage && d.Item.ArchivedAt == nil {
+								Add the parts that go with this item, like a stand or power cable.
+							}
+						</p>
+					} else {
+						<ul>
+							for _, a := range d.Accessories {
+								<li class="is-flex is-align-items-center py-1" style="gap: 0.5rem">
+									<span>{ a.Name }</span>
+									if d.CanManage && d.Item.ArchivedAt == nil {
+										<button
+											hx-delete={ "/admin/fragments/inventory/" + d.Item.ID + "/accessories/" + a.ID }
+											hx-swap="none"
+											hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
+											aria-label={ "Remove " + a.Name }
+											class="button is-small is-white has-text-grey"
+										>×</button>
+									}
+								</li>
+							}
+						</ul>
+					}
+					if d.CanManage && d.Item.ArchivedAt == nil {
+						<form
+							hx-post={ "/admin/fragments/inventory/" + d.Item.ID + "/accessories" }
+							hx-target="#accessory-add-result"
+							hx-swap="innerHTML"
+							hx-on:htmx:after-request="if(event.detail.xhr.status === 204) location.reload()"
+							class="mt-3"
+						>
+							<div class="field has-addons mb-0">
+								<div class="control is-expanded">
+									<input type="text" name="name" placeholder="Add an accessory, for example Power cable" maxlength="200" required class="input is-small"/>
+								</div>
+								<div class="control">
+									<button type="submit" class="button is-primary is-small">Add</button>
+								</div>
+							</div>
+							<div id="accessory-add-result"></div>
+						</form>
+					}
+				</div>
+			</div>
+			<h2 class="title is-5">History</h2>
+			<div class="card mb-4">
+				<div class="table-container">
+					<table class="table is-fullwidth is-hoverable is-narrow mb-0">
+						<thead>
+							<tr>
+								<th>When</th>
+								<th>Event</th>
+								<th>Holder</th>
+								<th class="is-hidden-mobile">Previous holder</th>
+								<th class="is-hidden-mobile">Note</th>
+							</tr>
+						</thead>
+						<tbody>
+							if len(d.Events) == 0 {
+								<tr>
+									<td colspan="5" class="has-text-centered py-5">
+										@EmptyState("No history yet.")
+									</td>
+								</tr>
+							}
+							for _, e := range d.Events {
+								<tr>
+									<td class="is-size-7" style="white-space: nowrap">{ invDateTime(e.Event.CreatedAt) }</td>
+									<td class="is-size-7">{ e.Label }</td>
+									<td class="is-size-7">{ invHolder(e.HolderName) }</td>
+									<td class="is-hidden-mobile is-size-7">{ invHolder(e.PreviousName) }</td>
+									<td class="is-hidden-mobile is-size-7 has-text-grey">{ invStr(e.Event.Note) }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
+	}
+}
+
+templ InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[string][]string, canManage bool) {
+	@Layout("Custom Fields", "/admin/inventory/fields") {
+		<div>
+			<h1 class="title is-4 mb-3">Inventory Custom Fields</h1>
+			@PageHelp() {
+				Extra information to track on every item, such as a serial number or purchase date. Each field is optional. A text field holds whatever you type; a dropdown field offers a fixed list of choices so every item spells them the same way, for example a Type of A/V or Events. Any field can be switched between the two later. Deactivating a field hides it but keeps the values already entered.
+			}
+			if canManage {
+				<form
+					hx-post="/admin/fragments/inventory-fields"
+					hx-target="#field-add-result"
+					hx-swap="innerHTML"
+					hx-on:htmx:after-request="if(event.detail.xhr.status === 204) location.reload()"
+					class="box mb-4"
+					x-data="{ kind: 'text' }"
+				>
+					<div class="field has-addons">
+						<div class="control is-expanded">
+							<input type="text" name="label" placeholder="New field name, for example Serial number" required class="input is-small"/>
+						</div>
+						<div class="control">
+							<div class="select is-small">
+								<select name="kind" x-model="kind" aria-label="Field type">
+									<option value="text">Text</option>
+									<option value="select">Dropdown</option>
+								</select>
+							</div>
+						</div>
+						<div class="control">
+							<button type="submit" class="button is-primary is-small">Add field</button>
+						</div>
+					</div>
+					<div class="field" x-show="kind === 'select'" style="display:none">
+						<textarea name="options" rows="4" placeholder="One choice per line, for example A/V" aria-label="Dropdown choices" class="textarea is-small"></textarea>
+					</div>
+					<div id="field-add-result"></div>
+				</form>
+			}
+			<div class="card mb-4">
+				<div class="table-container">
+					<table class="table is-fullwidth is-narrow mb-0">
+						<thead>
+							<tr>
+								<th>Field</th>
+								<th class="is-hidden-mobile">Key</th>
+								if canManage {
+									<th></th>
+								}
+							</tr>
+						</thead>
+						<tbody>
+							if len(defs) == 0 {
+								<tr>
+									<td colspan="3" class="has-text-centered py-5">
+										@EmptyState("No custom fields yet.")
+									</td>
+								</tr>
+							}
+							for i, d := range defs {
+								<tr>
+									<td>
+										if canManage {
+											<form
+												hx-put={ "/admin/fragments/inventory-fields/" + d.ID }
+												hx-target={ "#field-result-" + d.ID }
+												hx-swap="innerHTML"
+												hx-on:htmx:after-request="if(event.detail.xhr.status === 204) location.reload()"
+												x-data={ "{ kind: '" + d.Kind + "' }" }
+											>
+												<div class="is-flex is-align-items-center" style="gap: 0.5rem">
+													<div class="control" style="flex: 1">
+														<input type="text" name="label" value={ d.Label } required class="input is-small"/>
+													</div>
+													<div class="select is-small">
+														<select name="kind" x-model="kind" aria-label={ "Type of " + d.Label }>
+															<option value="text" selected?={ d.Kind == "text" }>Text</option>
+															<option value="select" selected?={ d.Kind == "select" }>Dropdown</option>
+														</select>
+													</div>
+													<label class="checkbox is-size-7">
+														<input type="checkbox" name="active" checked?={ d.Active }/>
+														Active
+													</label>
+													<button type="submit" class="button is-small is-outlined is-link">Save</button>
+												</div>
+												<div class="mt-2" x-show="kind === 'select'" style="display:none">
+													<textarea name="options" rows="4" aria-label={ "Choices for " + d.Label } class="textarea is-small">{ invLines(invFieldChoices(d, suggested)) }</textarea>
+													<p class="help">
+														One choice per line.
+														if d.Kind == "text" && len(suggested[d.Key]) > 0 {
+															The values already on your items are listed so you can tidy them. Items keep what they have until you change it.
+														} else {
+															Items keep a value that's removed from the list until you change it.
+														}
+													</p>
+												</div>
+												<div id={ "field-result-" + d.ID }></div>
+											</form>
+										} else {
+											{ d.Label }
+											if !d.Active {
+												<span class="tag is-light is-small ml-1">Inactive</span>
+											}
+											if d.IsSelect() {
+												<span class="is-block is-size-7 has-text-grey">Dropdown: { invLines(d.Options) }</span>
+											}
+										}
+									</td>
+									<td class="is-hidden-mobile is-family-monospace is-size-7 has-text-grey">{ d.Key }</td>
+									if canManage {
+										<td class="has-text-right" style="white-space: nowrap">
+											<div class="buttons are-small mb-0 is-justify-content-flex-end" style="gap: 0.25rem">
+												<button
+													hx-post={ "/admin/fragments/inventory-fields/" + d.ID + "/move?dir=up" }
+													hx-swap="none"
+													hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
+													disabled?={ i == 0 }
+													aria-label="Move up"
+													class="button is-small"
+												>↑</button>
+												<button
+													hx-post={ "/admin/fragments/inventory-fields/" + d.ID + "/move?dir=down" }
+													hx-swap="none"
+													hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
+													disabled?={ i == len(defs)-1 }
+													aria-label="Move down"
+													class="button is-small"
+												>↓</button>
+												<span x-data="{ confirming: false }">
+													<button
+														x-show="!confirming"
+														x-on:click.stop="confirming = true"
+														class="button is-small is-outlined is-danger"
+													>Delete</button>
+													<span x-show="confirming" style="display:none">
+														<button
+															x-on:click.stop
+															hx-delete={ "/admin/fragments/inventory-fields/" + d.ID }
+															hx-swap="none"
+															hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
+															class="button is-small is-danger"
+														>Confirm</button>
+														<button
+															x-on:click.stop="confirming = false"
+															class="button is-small"
+														>Cancel</button>
+													</span>
+												</span>
+											</div>
+										</td>
+									}
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
+	}
+}

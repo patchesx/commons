@@ -259,12 +259,18 @@ func getClient(ctx context.Context) *slacklib.Client {
 		return nil
 	}
 	mu.Lock()
-	defer mu.Unlock()
-	if token != cachedToken {
+	changed := token != cachedToken
+	if changed {
 		cachedToken = token
 		cachedClient = slacklib.New(token)
 	}
-	return cachedClient
+	client := cachedClient
+	mu.Unlock()
+	if changed {
+		// First use of this token (startup, or the token was just saved): register the workspace IDs.
+		go registerWorkspaceIdentifiers(context.Background(), pkgPool, pkgEncKey, client)
+	}
+	return client
 }
 
 // SlackChannel is a minimal channel descriptor returned by ListChannels.

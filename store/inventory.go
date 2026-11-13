@@ -17,6 +17,10 @@ var ErrInventoryCodeTaken = errors.New("inventory code already in use")
 // No event is written.
 var ErrInventoryAlreadyHolder = errors.New("user already holds this item")
 
+// ErrInventoryNotHolder is returned by ApplyCustodyChange when FromUserID is set and that user no longer
+// holds the item.
+var ErrInventoryNotHolder = errors.New("user does not hold this item")
+
 // ErrInventoryItemArchived is returned when a custody change targets an archived item.
 var ErrInventoryItemArchived = errors.New("inventory item is archived")
 
@@ -67,6 +71,8 @@ type InventoryFieldDefinition struct {
 	ID        string
 	Key       string
 	Label     string
+	Kind      string   // InventoryFieldText or InventoryFieldSelect
+	Options   []string // the allowed values of a select field, in display order
 	SortOrder int
 	Active    bool
 	CreatedAt time.Time
@@ -91,14 +97,15 @@ type CustodyEvent struct {
 
 // CustodyChange describes a holder change to apply immediately.
 type CustodyChange struct {
-	ItemID    string
-	UserID    string
-	Source    string
-	RawName   *string
-	RawEmail  *string
-	IPAddress *string
-	UserAgent *string
-	Note      *string
+	ItemID     string
+	UserID     string
+	FromUserID string // when set (hand-offs), the change applies only while this user is the holder
+	Source     string
+	RawName    *string
+	RawEmail   *string
+	IPAddress  *string
+	UserAgent  *string
+	Note       *string
 }
 
 // PendingClaim is an unmatched web-form claim awaiting an admin, with the item and previous holder joined in.
@@ -180,12 +187,12 @@ func GetInventoryItem(ctx context.Context, pool *pgxpool.Pool, id string) (*Inve
 		`SELECT `+inventoryItemCols+` FROM inventory.items WHERE id = $1`, id))
 }
 
-// GetInventoryItemByCode returns an active item by its code (case-insensitive, surrounding space ignored).
-// Archived items are treated as absent. Returns ErrNotFound if absent.
+// GetInventoryItemByCode returns an active item by its code, accepting any case and with or without the
+// dash (see NormalizeInventoryCode). Archived items are treated as absent. Returns ErrNotFound if absent.
 func GetInventoryItemByCode(ctx context.Context, pool *pgxpool.Pool, code string) (*InventoryItem, error) {
 	return scanInventoryItem(pool.QueryRow(ctx,
 		`SELECT `+inventoryItemCols+` FROM inventory.items WHERE code = $1 AND archived_at IS NULL`,
-		strings.ToUpper(strings.TrimSpace(code))))
+		NormalizeInventoryCode(code)))
 }
 
 // ListInventoryItems returns items ordered by name. Archived items are included only when requested.
@@ -288,7 +295,7 @@ func RestoreInventoryItem(ctx context.Context, pool *pgxpool.Pool, id string) er
 // ListInventoryFieldDefinitions returns field definitions in display order.
 func ListInventoryFieldDefinitions(ctx context.Context, pool *pgxpool.Pool, activeOnly bool) ([]InventoryFieldDefinition, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, key, label, sort_order, active, created_at
+		SELECT id, key, label, kind, options, sort_order, active, created_at
 		FROM inventory.field_definitions
 		WHERE NOT $1 OR active
 		ORDER BY sort_order, created_at`, activeOnly)
@@ -300,7 +307,7 @@ func ListInventoryFieldDefinitions(ctx context.Context, pool *pgxpool.Pool, acti
 	defs := make([]InventoryFieldDefinition, 0)
 	for rows.Next() {
 		var d InventoryFieldDefinition
-		if err := rows.Scan(&d.ID, &d.Key, &d.Label, &d.SortOrder, &d.Active, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.Key, &d.Label, &d.Kind, &d.Options, &d.SortOrder, &d.Active, &d.CreatedAt); err != nil {
 			return nil, err
 		}
 		defs = append(defs, d)
@@ -315,8 +322,8 @@ func CreateInventoryFieldDefinition(ctx context.Context, pool *pgxpool.Pool, key
 	err := pool.QueryRow(ctx, `
 		INSERT INTO inventory.field_definitions (key, label, sort_order)
 		SELECT $1, $2, COALESCE(MAX(sort_order), 0) + 1 FROM inventory.field_definitions
-		RETURNING id, key, label, sort_order, active, created_at`, key, label,
-	).Scan(&d.ID, &d.Key, &d.Label, &d.SortOrder, &d.Active, &d.CreatedAt)
+		RETURNING id, key, label, kind, options, sort_order, active, created_at`, key, label,
+	).Scan(&d.ID, &d.Key, &d.Label, &d.Kind, &d.Options, &d.SortOrder, &d.Active, &d.CreatedAt)
 	if isUniqueViolation(err) {
 		return nil, ErrInventoryFieldKeyTaken
 	}
@@ -392,18 +399,18 @@ func SetInventoryItemMetadata(ctx context.Context, pool *pgxpool.Pool, itemID st
 		current = map[string]string{}
 	}
 
-	rows, err := tx.Query(ctx, `SELECT key FROM inventory.field_definitions WHERE active`)
+	rows, err := tx.Query(ctx, `SELECT key, kind, options FROM inventory.field_definitions WHERE active`)
 	if err != nil {
 		return err
 	}
-	active := map[string]bool{}
+	active := map[string]InventoryFieldDefinition{}
 	for rows.Next() {
-		var k string
-		if err := rows.Scan(&k); err != nil {
+		var def InventoryFieldDefinition
+		if err := rows.Scan(&def.Key, &def.Kind, &def.Options); err != nil {
 			rows.Close()
 			return err
 		}
-		active[k] = true
+		active[def.Key] = def
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -411,8 +418,16 @@ func SetInventoryItemMetadata(ctx context.Context, pool *pgxpool.Pool, itemID st
 	}
 
 	for k, v := range values {
-		if !active[k] {
+		def, ok := active[k]
+		if !ok {
 			return ErrInventoryUnknownField
+		}
+		if v != "" && v != current[k] {
+			canonical, err := def.CheckValue(v)
+			if err != nil {
+				return err
+			}
+			v = canonical
 		}
 		if v == "" {
 			delete(current, k)
@@ -470,6 +485,9 @@ func ApplyCustodyChange(ctx context.Context, pool *pgxpool.Pool, c CustodyChange
 	if archived {
 		return nil, ErrInventoryItemArchived
 	}
+	if c.FromUserID != "" && (holder == nil || *holder != c.FromUserID) {
+		return nil, ErrInventoryNotHolder
+	}
 	if holder != nil && *holder == c.UserID {
 		return nil, ErrInventoryAlreadyHolder
 	}
@@ -517,6 +535,20 @@ func RecordPendingClaim(ctx context.Context, pool *pgxpool.Pool, itemID, rawName
 		return nil, err
 	}
 	return ev, tx.Commit(ctx)
+}
+
+// GetCustodyEvent returns one custody event. Returns ErrNotFound if absent.
+func GetCustodyEvent(ctx context.Context, pool *pgxpool.Pool, id string) (*CustodyEvent, error) {
+	return scanCustodyEvent(pool.QueryRow(ctx,
+		`SELECT `+custodyEventCols+` FROM inventory.custody_events WHERE id = $1`, id))
+}
+
+// CountPendingUnmatched returns how many web-form claims are waiting for an admin to link them.
+func CountPendingUnmatched(ctx context.Context, pool *pgxpool.Pool) (int, error) {
+	var n int
+	err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM inventory.custody_events WHERE status = 'pending_unmatched'`).Scan(&n)
+	return n, err
 }
 
 // ListPendingUnmatched returns unresolved web-form claims, oldest first.
@@ -675,6 +707,42 @@ func RecordVerification(ctx context.Context, pool *pgxpool.Pool, itemID string, 
 	return ev, tx.Commit(ctx)
 }
 
+// RecordInventoryDispute records that the holder says they no longer have the item (a disputed event
+// from a verification reminder). The holder does not change. The item is also stamped as escalated, since
+// the caller alerts inventory admins right away; that keeps the grace-period alert from firing a second
+// time. Returns ErrInventoryNoHolder if nobody holds the item.
+func RecordInventoryDispute(ctx context.Context, pool *pgxpool.Pool, itemID string, note *string) (*CustodyEvent, error) {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	holder, archived, err := lockInventoryItem(ctx, tx, itemID)
+	if err != nil {
+		return nil, err
+	}
+	if archived {
+		return nil, ErrInventoryItemArchived
+	}
+	if holder == nil {
+		return nil, ErrInventoryNoHolder
+	}
+
+	ev, err := scanCustodyEvent(tx.QueryRow(ctx, `
+		INSERT INTO inventory.custody_events (item_id, user_id, source, status, note)
+		VALUES ($1, $2, 'slack', 'disputed', $3)
+		RETURNING `+custodyEventCols, itemID, holder, note))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE inventory.items SET last_escalated_at = NOW(), updated_at = NOW() WHERE id = $1`, itemID); err != nil {
+		return nil, err
+	}
+	return ev, tx.Commit(ctx)
+}
+
 // ListInventoryCustodyEvents returns an item's history, newest first.
 func ListInventoryCustodyEvents(ctx context.Context, pool *pgxpool.Pool, itemID string) ([]CustodyEvent, error) {
 	rows, err := pool.Query(ctx, `
@@ -752,6 +820,24 @@ func MarkInventoryItemEscalated(ctx context.Context, pool *pgxpool.Pool, id stri
 }
 
 // ---- Email fallback ----
+
+// FindUserForClaimEmail matches the email typed on the public claim form to a member: users.email first
+// (stored lowercase, looked up case-insensitively), then a single user_identities.external_email match.
+// Returns ErrNotFound when nothing matches or the match is ambiguous.
+func FindUserForClaimEmail(ctx context.Context, pool *pgxpool.Pool, email string) (*User, error) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return nil, ErrNotFound
+	}
+	u, err := GetUserByEmail(ctx, pool, email)
+	if err == nil {
+		return u, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	return GetUserByUniqueExternalEmail(ctx, pool, email)
+}
 
 // GetUserByUniqueExternalEmail finds a user through user_identities.external_email (case-insensitive).
 // It matches only when exactly one distinct user has that address; zero or several return ErrNotFound.

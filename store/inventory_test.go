@@ -45,10 +45,9 @@ func TestInventoryConfigSeeded(t *testing.T) {
 	pool := testhelpers.SetupTestDB(t)
 
 	want := map[[2]string]string{
-		{"inventory", "default_grace_days"}:           "5",
-		{"inventory", "claim_rate_limit_per_hour"}:    "10",
-		{"jobs", "inventory_verify_enabled"}:          "true",
-		{"jobs", "inventory_verify_interval_minutes"}: "1440",
+		{"inventory", "default_grace_days"}:        "5",
+		{"inventory", "claim_rate_limit_per_hour"}: "10",
+		{"jobs", "inventory_verify_enabled"}:       "true",
 	}
 	for k, v := range want {
 		var got string
