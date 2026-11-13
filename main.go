@@ -307,6 +307,7 @@ func main() {
 	mux.Handle("GET /admin/fragments/inventory/claims-count", webAuth(admin.InventoryClaimsCount()))
 	mux.Handle("POST /admin/fragments/inventory/claims/{id}/link", webAuth(admin.InventoryClaimLink()))
 	mux.Handle("GET /admin/inventory/labels", webAuth(admin.InventoryLabels()))
+	mux.Handle("GET /admin/inventory/labels.pdf", webAuth(admin.InventoryLabelsPDF()))
 	mux.Handle("GET /admin/inventory/{id}/qr.png", webAuth(admin.InventoryQRPNG()))
 	mux.Handle("GET /admin/inventory/{id}", webAuth(admin.InventoryDetailPage()))
 	mux.Handle("GET /admin/fragments/inventory-table", webAuth(admin.InventoryTable()))

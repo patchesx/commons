@@ -9,6 +9,7 @@ import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strconv"
 	"strings"
@@ -49,16 +50,41 @@ type InventoryDetailData struct {
 	CanManage      bool
 }
 
-// InventoryLabel is one printable label: the formatted code above an inline SVG QR code, the item name below.
+// LabelHeightRatio is the usual label height as a multiple of its width: room for the code, a square QR code, and a
+// two-line name.
+const LabelHeightRatio = 1.45
+
+// InventoryLabelSheet is the layout of a print run on US Letter: label size, spacing, the grid that fits, and the
+// labels split into sheets. A nil entry in a page is a skipped position on a partly used sheet.
+type InventoryLabelSheet struct {
+	Width, Height, Gap, Margin float64 // inches
+	HeightAuto                 bool    // Height was worked out from Width, not asked for
+	Skip                       int     // positions to leave empty at the start of the first sheet
+	Cols, Rows                 int
+	Total                      int // labels to print
+	Pages                      [][]*InventoryLabel
+	IDs                        []string // the selection, kept so the settings can be re-applied
+}
+
+func (s InventoryLabelSheet) PerPage() int { return s.Cols * s.Rows }
+
+// Scale is the size the label's text, padding, and QR code are worked out from: the width, unless the label is
+// shorter than the usual proportions, in which case what height allows. A wide, short label then gets smaller
+// text instead of crowding the QR code out.
+func (s InventoryLabelSheet) Scale() float64 {
+	return min(s.Width, s.Height/LabelHeightRatio)
+}
+
+// InventoryLabel is one printable label: the formatted code above the QR code, the item name below. PNG is the QR code image.
 type InventoryLabel struct {
 	Code string
 	Name string
-	SVG  string
+	PNG  []byte
 }
 
 // Label text and padding scale with the label width (inches) so one size setting drives the whole label.
-func invLabelCSS(width float64) string {
-	return fmt.Sprintf("width:%.2fin;padding:%.3fin", width, width*0.06)
+func invLabelPadCSS(width float64) string {
+	return fmt.Sprintf("padding:%.3fin", width*0.06)
 }
 
 func invCodeCSS(width float64) string {
@@ -69,8 +95,61 @@ func invNameCSS(width float64) string {
 	return fmt.Sprintf("font-size:%.3fin;margin-top:%.3fin", width*0.075, width*0.04)
 }
 
-func invWidthValue(width float64) string {
-	return strconv.FormatFloat(width, 'f', -1, 64)
+// invPNGURI embeds a PNG in the page as a data: URI.
+func invPNGURI(png []byte) string {
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+}
+
+func invFloat(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// invHeightValue is the height box's value: empty when the height is worked out from the width, so the box keeps
+// following the width.
+func invHeightValue(s InventoryLabelSheet) string {
+	if s.HeightAuto {
+		return ""
+	}
+	return invFloat(s.Height)
+}
+
+// invQRCSS sizes the QR code box explicitly: as wide as the label allows inside its padding, and no taller than
+// what is left under the code and over a two-line name. Fixed sizes keep the layout simple for the print engine.
+// QRSide is the width and height in inches of the QR code on a label: as wide as the label allows inside its
+// padding, and no taller than what is left under the code and over a two-line name.
+func (s InventoryLabelSheet) QRSide() float64 {
+	k := s.Scale()
+	side := min(s.Width-2*k*0.06, s.Height-2*k*0.06-k*0.19-k*0.075*1.15*2-k*0.04)
+	return max(side, 0.3)
+}
+
+func invQRCSS(s InventoryLabelSheet) string {
+	return fmt.Sprintf("width:%.3fin;height:%.3fin", s.QRSide(), s.QRSide())
+}
+
+// invPageCSS positions a sheet's rows: the top margin, and the side offset that centers the grid on the page.
+func invPageCSS(s InventoryLabelSheet) string {
+	side := max((8.5-float64(s.Cols)*s.Width-float64(s.Cols-1)*s.Gap)/2, 0)
+	return fmt.Sprintf("padding:%.3fin 0 0 %.3fin;--gap:%.3fin", s.Margin, side, s.Gap)
+}
+
+func invRowCSS(s InventoryLabelSheet) string {
+	return fmt.Sprintf("height:%.3fin", s.Height)
+}
+
+func invCellCSS(s InventoryLabelSheet) string {
+	return fmt.Sprintf("width:%.3fin;height:%.3fin", s.Width, s.Height)
+}
+
+// invRows splits one sheet's positions into rows of cols.
+func invRows(page []*InventoryLabel, cols int) [][]*InventoryLabel {
+	var rows [][]*InventoryLabel
+	for len(page) > 0 {
+		n := min(cols, len(page))
+		rows = append(rows, page[:n])
+		page = page[n:]
+	}
+	return rows
 }
 
 // invFieldChoices is the text a field's choices box starts with: its list, or for a text field the values already in use.
@@ -201,7 +280,7 @@ func InventoryPage(rows []InventoryRow, showArchived, canManage, labelsReady boo
 				return templ_7745c5c3_Err
 			}
 			if canManage {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<form id=\"inv-labels-form\" method=\"get\" action=\"/admin/inventory/labels\" target=\"_blank\" onsubmit=\"if (!document.querySelector('input[name=id][form=inv-labels-form]:checked')) { document.getElementById('inv-labels-help').classList.add('has-text-danger'); return false; } return true\" class=\"is-flex is-align-items-center is-flex-wrap-wrap mb-3\" style=\"gap: 0.5rem\"><label for=\"inv-label-width\" class=\"is-size-7\">Label width (inches)</label> <input id=\"inv-label-width\" type=\"number\" name=\"width\" min=\"0.75\" max=\"6\" step=\"0.25\" value=\"2\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<form id=\"inv-labels-form\" method=\"get\" action=\"/admin/inventory/labels\" onsubmit=\"if (!document.querySelector('input[name=id][form=inv-labels-form]:checked')) { document.getElementById('inv-labels-help').classList.add('has-text-danger'); return false; } return true\" class=\"is-flex is-align-items-center is-flex-wrap-wrap mb-3\" style=\"gap: 0.5rem\"><label for=\"inv-label-width\" class=\"is-size-7\">Label width (inches)</label> <input id=\"inv-label-width\" type=\"number\" name=\"width\" min=\"0.75\" max=\"6\" step=\"0.25\" value=\"2\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -326,7 +405,7 @@ func InventoryTable(rows []InventoryRow, canManage bool) templ.Component {
 					var templ_7745c5c3_Var5 string
 					templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(row.Item.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 209, Col: 63}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 287, Col: 63}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 					if templ_7745c5c3_Err != nil {
@@ -339,7 +418,7 @@ func InventoryTable(rows []InventoryRow, canManage bool) templ.Component {
 					var templ_7745c5c3_Var6 string
 					templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs("Select " + row.Item.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 209, Col: 127}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 287, Col: 127}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 					if templ_7745c5c3_Err != nil {
@@ -362,7 +441,7 @@ func InventoryTable(rows []InventoryRow, canManage bool) templ.Component {
 			var templ_7745c5c3_Var7 templ.SafeURL
 			templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/admin/inventory/" + row.Item.ID))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 215, Col: 64}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 293, Col: 64}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 			if templ_7745c5c3_Err != nil {
@@ -375,7 +454,7 @@ func InventoryTable(rows []InventoryRow, canManage bool) templ.Component {
 			var templ_7745c5c3_Var8 string
 			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(row.Item.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 215, Col: 104}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 293, Col: 104}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 			if templ_7745c5c3_Err != nil {
@@ -403,7 +482,7 @@ func InventoryTable(rows []InventoryRow, canManage bool) templ.Component {
 				var templ_7745c5c3_Var9 string
 				templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(*row.Item.Location)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 221, Col: 72}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 299, Col: 72}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 				if templ_7745c5c3_Err != nil {
@@ -421,7 +500,7 @@ func InventoryTable(rows []InventoryRow, canManage bool) templ.Component {
 			var templ_7745c5c3_Var10 string
 			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(store.FormatInventoryCode(row.Item.Code))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 223, Col: 130}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 301, Col: 130}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 			if templ_7745c5c3_Err != nil {
@@ -434,7 +513,7 @@ func InventoryTable(rows []InventoryRow, canManage bool) templ.Component {
 			var templ_7745c5c3_Var11 string
 			templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(store.FormatInventoryCode(row.Item.Code))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 225, Col: 109}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 303, Col: 109}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 			if templ_7745c5c3_Err != nil {
@@ -447,7 +526,7 @@ func InventoryTable(rows []InventoryRow, canManage bool) templ.Component {
 			var templ_7745c5c3_Var12 string
 			templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(invHolder(row.HolderName))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 226, Col: 57}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 304, Col: 57}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 			if templ_7745c5c3_Err != nil {
@@ -460,7 +539,7 @@ func InventoryTable(rows []InventoryRow, canManage bool) templ.Component {
 			var templ_7745c5c3_Var13 string
 			templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(invDate(row.Item.LastVerifiedAt))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 227, Col: 95}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 305, Col: 95}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 			if templ_7745c5c3_Err != nil {
@@ -473,7 +552,7 @@ func InventoryTable(rows []InventoryRow, canManage bool) templ.Component {
 			var templ_7745c5c3_Var14 templ.SafeURL
 			templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/admin/inventory/" + row.Item.ID))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 230, Col: 64}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 308, Col: 64}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 			if templ_7745c5c3_Err != nil {
@@ -492,7 +571,7 @@ func InventoryTable(rows []InventoryRow, canManage bool) templ.Component {
 					var templ_7745c5c3_Var15 string
 					templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs("/admin/fragments/inventory/" + row.Item.ID + "/edit-modal")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 234, Col: 81}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 312, Col: 81}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 					if templ_7745c5c3_Err != nil {
@@ -505,7 +584,7 @@ func InventoryTable(rows []InventoryRow, canManage bool) templ.Component {
 					var templ_7745c5c3_Var16 string
 					templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs("/admin/fragments/inventory/" + row.Item.ID + "/archive")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 249, Col: 81}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 327, Col: 81}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 					if templ_7745c5c3_Err != nil {
@@ -523,7 +602,7 @@ func InventoryTable(rows []InventoryRow, canManage bool) templ.Component {
 					var templ_7745c5c3_Var17 string
 					templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs("/admin/fragments/inventory/" + row.Item.ID + "/restore")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 262, Col: 79}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 340, Col: 79}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 					if templ_7745c5c3_Err != nil {
@@ -602,7 +681,7 @@ func InventoryItemModal(item store.InventoryItem, isNew, canGrace bool, errMsg s
 			var templ_7745c5c3_Var19 string
 			templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs("/admin/fragments/inventory/" + item.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 296, Col: 52}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 374, Col: 52}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 			if templ_7745c5c3_Err != nil {
@@ -665,7 +744,7 @@ func inventoryItemFields(item store.InventoryItem, isNew, canGrace bool) templ.C
 		var templ_7745c5c3_Var21 string
 		templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinStringErrs(item.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 312, Col: 65}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 390, Col: 65}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var21))
 		if templ_7745c5c3_Err != nil {
@@ -678,7 +757,7 @@ func inventoryItemFields(item store.InventoryItem, isNew, canGrace bool) templ.C
 		var templ_7745c5c3_Var22 string
 		templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(invStr(item.Location))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 318, Col: 85}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 396, Col: 85}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 		if templ_7745c5c3_Err != nil {
@@ -691,7 +770,7 @@ func inventoryItemFields(item store.InventoryItem, isNew, canGrace bool) templ.C
 		var templ_7745c5c3_Var23 string
 		templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinStringErrs(invStr(item.Description))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 324, Col: 107}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 402, Col: 107}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
 		if templ_7745c5c3_Err != nil {
@@ -704,7 +783,7 @@ func inventoryItemFields(item store.InventoryItem, isNew, canGrace bool) templ.C
 		var templ_7745c5c3_Var24 string
 		templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(invInt(item.VerifyEveryDays))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 330, Col: 109}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 408, Col: 109}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var24))
 		if templ_7745c5c3_Err != nil {
@@ -722,7 +801,7 @@ func inventoryItemFields(item store.InventoryItem, isNew, canGrace bool) templ.C
 			var templ_7745c5c3_Var25 string
 			templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(invInt(item.VerifyGraceDays))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 338, Col: 109}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 416, Col: 109}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 			if templ_7745c5c3_Err != nil {
@@ -771,7 +850,7 @@ func inventoryModalButtons(submitLabel string) templ.Component {
 		var templ_7745c5c3_Var27 string
 		templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(submitLabel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 354, Col: 73}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 432, Col: 73}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 		if templ_7745c5c3_Err != nil {
@@ -825,7 +904,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 			var templ_7745c5c3_Var30 string
 			templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(d.Item.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 364, Col: 45}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 442, Col: 45}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 			if templ_7745c5c3_Err != nil {
@@ -853,7 +932,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 				var templ_7745c5c3_Var31 templ.SafeURL
 				templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/admin/inventory/" + d.Item.ID + "/qr.png"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 371, Col: 69}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 449, Col: 69}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 				if templ_7745c5c3_Err != nil {
@@ -866,20 +945,20 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 				var templ_7745c5c3_Var32 templ.SafeURL
 				templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/admin/inventory/labels?id=" + d.Item.ID))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 372, Col: 67}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 450, Col: 67}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 71, "\" target=\"_blank\" class=\"button is-outlined is-link\">Print label</a> <span x-data=\"{ confirming: false }\"><button x-show=\"!confirming\" x-on:click.stop=\"confirming = true\" class=\"button is-small is-outlined is-danger\">Rotate code</button> <span class=\"is-hidden is-align-items-center\" :class=\"{ 'is-flex': confirming, 'is-hidden': !confirming }\"><span class=\"is-size-7 mr-2\">Labels with the old code will stop working.</span> <button x-on:click.stop hx-post=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 71, "\" class=\"button is-outlined is-link\">Print label</a> <span x-data=\"{ confirming: false }\"><button x-show=\"!confirming\" x-on:click.stop=\"confirming = true\" class=\"button is-small is-outlined is-danger\">Rotate code</button> <span class=\"is-hidden is-align-items-center\" :class=\"{ 'is-flex': confirming, 'is-hidden': !confirming }\"><span class=\"is-size-7 mr-2\">Labels with the old code will stop working.</span> <button x-on:click.stop hx-post=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var33 string
 				templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.JoinStringErrs("/admin/fragments/inventory/" + d.Item.ID + "/rotate-code")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 383, Col: 76}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 461, Col: 76}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var33))
 				if templ_7745c5c3_Err != nil {
@@ -897,7 +976,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 			var templ_7745c5c3_Var34 string
 			templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(store.FormatInventoryCode(d.Item.Code))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 403, Col: 81}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 481, Col: 81}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 			if templ_7745c5c3_Err != nil {
@@ -910,7 +989,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 			var templ_7745c5c3_Var35 string
 			templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(invHolder(d.HolderName))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 407, Col: 38}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 485, Col: 38}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 			if templ_7745c5c3_Err != nil {
@@ -923,7 +1002,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 			var templ_7745c5c3_Var36 string
 			templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(invHolder(invStr(d.Item.Location)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 411, Col: 49}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 489, Col: 49}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 			if templ_7745c5c3_Err != nil {
@@ -936,7 +1015,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 			var templ_7745c5c3_Var37 string
 			templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinStringErrs(invHolder(invStr(d.Item.Description)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 415, Col: 52}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 493, Col: 52}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
 			if templ_7745c5c3_Err != nil {
@@ -949,7 +1028,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 			var templ_7745c5c3_Var38 string
 			templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(invDate(d.Item.LastVerifiedAt))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 419, Col: 45}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 497, Col: 45}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 			if templ_7745c5c3_Err != nil {
@@ -968,7 +1047,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 				var templ_7745c5c3_Var39 string
 				templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(*d.Item.VerifyEveryDays))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 427, Col: 50}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 505, Col: 50}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 				if templ_7745c5c3_Err != nil {
@@ -986,7 +1065,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 			var templ_7745c5c3_Var40 string
 			templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(d.GraceDays))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 434, Col: 37}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 512, Col: 37}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 			if templ_7745c5c3_Err != nil {
@@ -1014,7 +1093,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 				var templ_7745c5c3_Var41 string
 				templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(f.Label)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 442, Col: 23}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 520, Col: 23}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 				if templ_7745c5c3_Err != nil {
@@ -1027,7 +1106,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 				var templ_7745c5c3_Var42 string
 				templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinStringErrs(f.Value)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 443, Col: 23}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 521, Col: 23}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
 				if templ_7745c5c3_Err != nil {
@@ -1070,7 +1149,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 					var templ_7745c5c3_Var43 string
 					templ_7745c5c3_Var43, templ_7745c5c3_Err = templ.JoinStringErrs(a.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 465, Col: 23}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 543, Col: 23}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var43))
 					if templ_7745c5c3_Err != nil {
@@ -1088,7 +1167,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 						var templ_7745c5c3_Var44 string
 						templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs("/admin/fragments/inventory/" + d.Item.ID + "/accessories/" + a.ID)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 468, Col: 89}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 546, Col: 89}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 						if templ_7745c5c3_Err != nil {
@@ -1101,7 +1180,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 						var templ_7745c5c3_Var45 string
 						templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.JoinStringErrs("Remove " + a.Name)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 471, Col: 42}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 549, Col: 42}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var45))
 						if templ_7745c5c3_Err != nil {
@@ -1130,7 +1209,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 				var templ_7745c5c3_Var46 string
 				templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs("/admin/fragments/inventory/" + d.Item.ID + "/accessories")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 481, Col: 75}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 559, Col: 75}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var46))
 				if templ_7745c5c3_Err != nil {
@@ -1167,7 +1246,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 				var templ_7745c5c3_Var47 string
 				templ_7745c5c3_Var47, templ_7745c5c3_Err = templ.JoinStringErrs(invDateTime(e.Event.CreatedAt))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 523, Col: 91}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 601, Col: 91}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var47))
 				if templ_7745c5c3_Err != nil {
@@ -1180,7 +1259,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 				var templ_7745c5c3_Var48 string
 				templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.JoinStringErrs(e.Label)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 524, Col: 40}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 602, Col: 40}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var48))
 				if templ_7745c5c3_Err != nil {
@@ -1193,7 +1272,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 				var templ_7745c5c3_Var49 string
 				templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinStringErrs(invHolder(e.HolderName))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 525, Col: 56}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 603, Col: 56}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 				if templ_7745c5c3_Err != nil {
@@ -1206,7 +1285,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 				var templ_7745c5c3_Var50 string
 				templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(invHolder(e.PreviousName))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 526, Col: 75}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 604, Col: 75}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 				if templ_7745c5c3_Err != nil {
@@ -1219,7 +1298,7 @@ func InventoryDetailPage(d InventoryDetailData) templ.Component {
 				var templ_7745c5c3_Var51 string
 				templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.JoinStringErrs(invStr(e.Event.Note))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 527, Col: 84}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 605, Col: 84}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var51))
 				if templ_7745c5c3_Err != nil {
@@ -1350,7 +1429,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 					var templ_7745c5c3_Var55 string
 					templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs("/admin/fragments/inventory-fields/" + d.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 601, Col: 64}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 679, Col: 64}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 					if templ_7745c5c3_Err != nil {
@@ -1363,7 +1442,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 					var templ_7745c5c3_Var56 string
 					templ_7745c5c3_Var56, templ_7745c5c3_Err = templ.JoinStringErrs("#field-result-" + d.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 602, Col: 47}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 680, Col: 47}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var56))
 					if templ_7745c5c3_Err != nil {
@@ -1376,7 +1455,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 					var templ_7745c5c3_Var57 string
 					templ_7745c5c3_Var57, templ_7745c5c3_Err = templ.JoinStringErrs("{ kind: '" + d.Kind + "' }")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 605, Col: 49}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 683, Col: 49}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var57))
 					if templ_7745c5c3_Err != nil {
@@ -1389,7 +1468,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 					var templ_7745c5c3_Var58 string
 					templ_7745c5c3_Var58, templ_7745c5c3_Err = templ.JoinStringErrs(d.Label)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 609, Col: 61}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 687, Col: 61}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var58))
 					if templ_7745c5c3_Err != nil {
@@ -1402,7 +1481,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 					var templ_7745c5c3_Var59 string
 					templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.JoinStringErrs("Type of " + d.Label)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 612, Col: 82}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 690, Col: 82}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var59))
 					if templ_7745c5c3_Err != nil {
@@ -1445,7 +1524,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 					var templ_7745c5c3_Var60 string
 					templ_7745c5c3_Var60, templ_7745c5c3_Err = templ.JoinStringErrs("Choices for " + d.Label)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 624, Col: 84}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 702, Col: 84}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var60))
 					if templ_7745c5c3_Err != nil {
@@ -1458,7 +1537,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 					var templ_7745c5c3_Var61 string
 					templ_7745c5c3_Var61, templ_7745c5c3_Err = templ.JoinStringErrs(invLines(invFieldChoices(d, suggested)))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 624, Col: 154}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 702, Col: 154}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var61))
 					if templ_7745c5c3_Err != nil {
@@ -1486,7 +1565,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 					var templ_7745c5c3_Var62 string
 					templ_7745c5c3_Var62, templ_7745c5c3_Err = templ.JoinStringErrs("field-result-" + d.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 634, Col: 44}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 712, Col: 44}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var62))
 					if templ_7745c5c3_Err != nil {
@@ -1500,7 +1579,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 					var templ_7745c5c3_Var63 string
 					templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.JoinStringErrs(d.Label)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 637, Col: 20}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 715, Col: 20}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var63))
 					if templ_7745c5c3_Err != nil {
@@ -1528,7 +1607,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 						var templ_7745c5c3_Var64 string
 						templ_7745c5c3_Var64, templ_7745c5c3_Err = templ.JoinStringErrs(invLines(d.Options))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 642, Col: 90}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 720, Col: 90}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var64))
 						if templ_7745c5c3_Err != nil {
@@ -1547,7 +1626,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 				var templ_7745c5c3_Var65 string
 				templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.JoinStringErrs(d.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 646, Col: 89}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 724, Col: 89}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var65))
 				if templ_7745c5c3_Err != nil {
@@ -1565,7 +1644,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 					var templ_7745c5c3_Var66 string
 					templ_7745c5c3_Var66, templ_7745c5c3_Err = templ.JoinStringErrs("/admin/fragments/inventory-fields/" + d.ID + "/move?dir=up")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 651, Col: 83}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 729, Col: 83}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var66))
 					if templ_7745c5c3_Err != nil {
@@ -1588,7 +1667,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 					var templ_7745c5c3_Var67 string
 					templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.JoinStringErrs("/admin/fragments/inventory-fields/" + d.ID + "/move?dir=down")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 659, Col: 85}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 737, Col: 85}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var67))
 					if templ_7745c5c3_Err != nil {
@@ -1611,7 +1690,7 @@ func InventoryFieldsPage(defs []store.InventoryFieldDefinition, suggested map[st
 					var templ_7745c5c3_Var68 string
 					templ_7745c5c3_Var68, templ_7745c5c3_Err = templ.JoinStringErrs("/admin/fragments/inventory-fields/" + d.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 675, Col: 70}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/inventory.templ`, Line: 753, Col: 70}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var68))
 					if templ_7745c5c3_Err != nil {

@@ -1,7 +1,12 @@
 package admintempl
 
-// InventoryLabelsPage is a standalone printable sheet: no admin chrome, controls hidden when printing.
-templ InventoryLabelsPage(labels []InventoryLabel, ids []string, width float64) {
+import "strconv"
+
+// InventoryLabelsPage is a standalone printable sheet: no admin chrome, controls hidden when printing. Labels
+// sit on US Letter pages in rows of fixed-size boxes, so none is ever split across a page break. The layout
+// is deliberately plain blocks (no grid, flex, fixed-height pages, or percentage-sized SVGs), because Safari's
+// print engine is unreliable with those.
+templ InventoryLabelsPage(s InventoryLabelSheet) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
@@ -9,36 +14,83 @@ templ InventoryLabelsPage(labels []InventoryLabel, ids []string, width float64) 
 			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 			<title>Inventory labels</title>
 			<style>
-				@page { margin: 0.4in; }
-				body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 1rem; color: #000; background: #fff; }
-				.controls { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; font-size: 14px; }
+				@page { size: 8.5in 11in; margin: 0; }
+				body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; color: #000; background: #e5e5e5; }
+				.controls { display: flex; gap: 0.5rem 1rem; align-items: flex-end; flex-wrap: wrap; padding: 1rem; background: #fff; font-size: 14px; }
+				.controls label { display: flex; flex-direction: column; gap: 0.15rem; font-size: 12px; color: #444; }
 				.controls input[type=number] { width: 5rem; }
-				.sheet { display: flex; flex-wrap: wrap; gap: 0.15in; }
-				.label { box-sizing: border-box; border: 1px dashed #888; text-align: center; break-inside: avoid; }
-				.label-code { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 700; letter-spacing: 0.08em; line-height: 1; }
-				.label-name { line-height: 1.15; overflow-wrap: anywhere; }
-				@media print { .controls { display: none; } body { padding: 0; } }
+				.controls .summary { flex-basis: 100%; margin: 0; color: #444; }
+				.page { box-sizing: border-box; width: 8.5in; margin: 1rem auto; background: #fff; }
+				.row { font-size: 0; line-height: 0; white-space: nowrap; }
+				.cell { display: inline-block; vertical-align: top; box-sizing: border-box; border: 1px dashed #888; overflow: hidden; }
+				.cell + .cell { margin-left: var(--gap); }
+				.row + .row { margin-top: var(--gap); }
+				.skipped { border-color: #ccc; background: #f3f3f3; }
+				.label { text-align: center; font-family: Helvetica, Arial, sans-serif; }
+				.label-code { font-family: Courier, "Courier New", monospace; font-weight: 700; line-height: 1; white-space: nowrap; }
+				.label-qr { margin: 0 auto; }
+				.label-qr img { display: block; image-rendering: pixelated; }
+				.label-name { line-height: 1.15; max-height: 2.3em; overflow: hidden; overflow-wrap: anywhere; white-space: normal; }
+				@media screen { .page { height: 10.95in; box-shadow: 0 0 4px rgba(0,0,0,0.3); } }
+				@media print {
+					body { background: #fff; }
+					.controls { display: none; }
+					.page { margin: 0; page-break-after: always; break-after: page; }
+					.page:last-child { page-break-after: auto; break-after: auto; }
+					.cell { border-color: transparent; }
+					.skipped { background: none; }
+				}
 			</style>
 		</head>
 		<body>
 			<form class="controls" method="get" action="/admin/inventory/labels">
-				for _, id := range ids {
+				for _, id := range s.IDs {
 					<input type="hidden" name="id" value={ id }/>
 				}
-				<label for="label-width">Label width (inches)</label>
-				<input id="label-width" type="number" name="width" min="0.75" max="6" step="0.25" value={ invWidthValue(width) }/>
+				<label>Label width (in)
+					<input type="number" name="width" min="0.75" max="6" step="0.125" value={ invFloat(s.Width) }/>
+				</label>
+				<label>Label height (in)
+					<input type="number" name="height" min="0.75" max="9.5" step="0.125" value={ invHeightValue(s) } placeholder={ invFloat(s.Height) }/>
+				</label>
+				<label>Gap (in)
+					<input type="number" name="gap" min="0" max="0.5" step="0.0625" value={ invFloat(s.Gap) }/>
+				</label>
+				<label>Page margin (in)
+					<input type="number" name="margin" min="0.25" max="1" step="0.125" value={ invFloat(s.Margin) }/>
+				</label>
+				<label>Start at label
+					<input type="number" name="start" min="1" max={ strconv.Itoa(s.PerPage()) } step="1" value={ strconv.Itoa(s.Skip + 1) }/>
+				</label>
 				<button type="submit">Apply</button>
-				<button type="button" onclick="window.print()">Print</button>
+				<button type="submit" formaction="/admin/inventory/labels.pdf" formtarget="_blank">Download / print PDF</button>
+				<p class="summary">
+					{ strconv.Itoa(s.Cols) } across × { strconv.Itoa(s.Rows) } down = { strconv.Itoa(s.PerPage()) } labels per sheet of US Letter (8.5 × 11 in).
+					{ strconv.Itoa(s.Total) } to print on { strconv.Itoa(len(s.Pages)) } sheet(s).
+					Download / print PDF opens these labels as a US Letter PDF with the settings above (use Apply to preview changes first). Print it at 100% / Actual Size. Grey squares are positions on a partly used sheet that are skipped.
+				</p>
 			</form>
-			<div class="sheet">
-				for _, l := range labels {
-					<div class="label" style={ templ.SafeCSS(invLabelCSS(width)) }>
-						<div class="label-code" style={ templ.SafeCSS(invCodeCSS(width)) }>{ l.Code }</div>
-						@templ.Raw(l.SVG)
-						<div class="label-name" style={ templ.SafeCSS(invNameCSS(width)) }>{ l.Name }</div>
-					</div>
-				}
-			</div>
+			for _, page := range s.Pages {
+				<div class="page" style={ templ.SafeCSS(invPageCSS(s)) }>
+					for _, row := range invRows(page, s.Cols) {
+						<div class="row" style={ templ.SafeCSS(invRowCSS(s)) }>
+							for _, l := range row {
+								if l == nil {
+									<div class="cell skipped" style={ templ.SafeCSS(invCellCSS(s)) }></div>
+								} else {
+									<div class="cell label" style={ templ.SafeCSS(invCellCSS(s) + ";" + invLabelPadCSS(s.Scale())) }>
+										<div class="label-code" style={ templ.SafeCSS(invCodeCSS(s.Scale())) }>{ l.Code }</div>
+										<div class="label-qr" style={ templ.SafeCSS(invQRCSS(s)) }>
+											<img src={ templ.SafeURL(invPNGURI(l.PNG)) } alt="QR code" style={ templ.SafeCSS(invQRCSS(s)) }/>
+										</div>
+										<div class="label-name" style={ templ.SafeCSS(invNameCSS(s.Scale())) }>{ l.Name }</div>
+									</div>
+								}
+							}
+						</div>
+					}
+				</div>
+			}
 		</body>
 	</html>
 }

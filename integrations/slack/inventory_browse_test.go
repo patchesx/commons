@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"commons/permissions"
 	"commons/store"
 )
 
@@ -246,11 +247,26 @@ func TestInventoryBrowseFlow(t *testing.T) {
 
 func TestHomeBrowseInventoryButton(t *testing.T) {
 	e := newInvEnv(t)
-	e.user(t, "U_PLAIN", "Pat Plain") // a member with no role and no inventory permission
+	e.user(t, "U_PLAIN", "Pat Plain") // a member with no role
+	viewer := e.user(t, "U_VIEW", "Vic Viewer")
+	role, err := store.CreateRole(e.ctx, e.pool, "role-view", "")
+	require.NoError(t, err)
+	require.NoError(t, store.AddRolePermission(e.ctx, e.pool, role.ID, permissions.InventoryView))
+	group, err := store.CreateRoleGroup(e.ctx, e.pool, "group-view", "", "")
+	require.NoError(t, err)
+	require.NoError(t, store.AddRoleToGroup(e.ctx, e.pool, group.ID, role.ID))
+	require.NoError(t, store.AssignGroupToUser(e.ctx, e.pool, viewer.ID, group.ID))
+
+	// The Home buttons are behind inventory.view, which acts as a rollout flag; the lists and actions behind them
+	// check no permission (see TestInventoryBrowseFlow).
+	Publish(e.ctx, e.pool, e.encKey, e.client, "U_VIEW")
+	home := e.fake.lastView(t, "views.publish")
+	assert.Contains(t, home, "Browse Inventory")
+	assert.Contains(t, home, ActionInventoryBrowseOpen)
+	assert.Contains(t, home, ActionOpenInventory)
 
 	Publish(e.ctx, e.pool, e.encKey, e.client, "U_PLAIN")
-	home := e.fake.lastView(t, "views.publish")
-	assert.Contains(t, home, "Browse Inventory", "the list is open to every member")
-	assert.Contains(t, home, ActionInventoryBrowseOpen)
-	assert.Contains(t, home, ActionOpenInventory, "and so is the claim button")
+	home = e.fake.lastView(t, "views.publish")
+	assert.NotContains(t, home, ActionInventoryBrowseOpen, "without inventory.view the buttons are not shown")
+	assert.NotContains(t, home, ActionOpenInventory)
 }

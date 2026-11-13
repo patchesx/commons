@@ -1,6 +1,7 @@
 package admintempl
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strconv"
 	"strings"
@@ -41,16 +42,41 @@ type InventoryDetailData struct {
 	CanManage      bool
 }
 
-// InventoryLabel is one printable label: the formatted code above an inline SVG QR code, the item name below.
+// LabelHeightRatio is the usual label height as a multiple of its width: room for the code, a square QR code, and a
+// two-line name.
+const LabelHeightRatio = 1.45
+
+// InventoryLabelSheet is the layout of a print run on US Letter: label size, spacing, the grid that fits, and the
+// labels split into sheets. A nil entry in a page is a skipped position on a partly used sheet.
+type InventoryLabelSheet struct {
+	Width, Height, Gap, Margin float64 // inches
+	HeightAuto                 bool    // Height was worked out from Width, not asked for
+	Skip                       int     // positions to leave empty at the start of the first sheet
+	Cols, Rows                 int
+	Total                      int // labels to print
+	Pages                      [][]*InventoryLabel
+	IDs                        []string // the selection, kept so the settings can be re-applied
+}
+
+func (s InventoryLabelSheet) PerPage() int { return s.Cols * s.Rows }
+
+// Scale is the size the label's text, padding, and QR code are worked out from: the width, unless the label is
+// shorter than the usual proportions, in which case what height allows. A wide, short label then gets smaller
+// text instead of crowding the QR code out.
+func (s InventoryLabelSheet) Scale() float64 {
+	return min(s.Width, s.Height/LabelHeightRatio)
+}
+
+// InventoryLabel is one printable label: the formatted code above the QR code, the item name below. PNG is the QR code image.
 type InventoryLabel struct {
 	Code string
 	Name string
-	SVG  string
+	PNG  []byte
 }
 
 // Label text and padding scale with the label width (inches) so one size setting drives the whole label.
-func invLabelCSS(width float64) string {
-	return fmt.Sprintf("width:%.2fin;padding:%.3fin", width, width*0.06)
+func invLabelPadCSS(width float64) string {
+	return fmt.Sprintf("padding:%.3fin", width*0.06)
 }
 
 func invCodeCSS(width float64) string {
@@ -61,8 +87,61 @@ func invNameCSS(width float64) string {
 	return fmt.Sprintf("font-size:%.3fin;margin-top:%.3fin", width*0.075, width*0.04)
 }
 
-func invWidthValue(width float64) string {
-	return strconv.FormatFloat(width, 'f', -1, 64)
+// invPNGURI embeds a PNG in the page as a data: URI.
+func invPNGURI(png []byte) string {
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+}
+
+func invFloat(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// invHeightValue is the height box's value: empty when the height is worked out from the width, so the box keeps
+// following the width.
+func invHeightValue(s InventoryLabelSheet) string {
+	if s.HeightAuto {
+		return ""
+	}
+	return invFloat(s.Height)
+}
+
+// invQRCSS sizes the QR code box explicitly: as wide as the label allows inside its padding, and no taller than
+// what is left under the code and over a two-line name. Fixed sizes keep the layout simple for the print engine.
+// QRSide is the width and height in inches of the QR code on a label: as wide as the label allows inside its
+// padding, and no taller than what is left under the code and over a two-line name.
+func (s InventoryLabelSheet) QRSide() float64 {
+	k := s.Scale()
+	side := min(s.Width-2*k*0.06, s.Height-2*k*0.06-k*0.19-k*0.075*1.15*2-k*0.04)
+	return max(side, 0.3)
+}
+
+func invQRCSS(s InventoryLabelSheet) string {
+	return fmt.Sprintf("width:%.3fin;height:%.3fin", s.QRSide(), s.QRSide())
+}
+
+// invPageCSS positions a sheet's rows: the top margin, and the side offset that centers the grid on the page.
+func invPageCSS(s InventoryLabelSheet) string {
+	side := max((8.5-float64(s.Cols)*s.Width-float64(s.Cols-1)*s.Gap)/2, 0)
+	return fmt.Sprintf("padding:%.3fin 0 0 %.3fin;--gap:%.3fin", s.Margin, side, s.Gap)
+}
+
+func invRowCSS(s InventoryLabelSheet) string {
+	return fmt.Sprintf("height:%.3fin", s.Height)
+}
+
+func invCellCSS(s InventoryLabelSheet) string {
+	return fmt.Sprintf("width:%.3fin;height:%.3fin", s.Width, s.Height)
+}
+
+// invRows splits one sheet's positions into rows of cols.
+func invRows(page []*InventoryLabel, cols int) [][]*InventoryLabel {
+	var rows [][]*InventoryLabel
+	for len(page) > 0 {
+		n := min(cols, len(page))
+		rows = append(rows, page[:n])
+		page = page[n:]
+	}
+	return rows
 }
 
 // invFieldChoices is the text a field's choices box starts with: its list, or for a text field the values already in use.
@@ -149,7 +228,6 @@ templ InventoryPage(rows []InventoryRow, showArchived, canManage, labelsReady bo
 					id="inv-labels-form"
 					method="get"
 					action="/admin/inventory/labels"
-					target="_blank"
 					onsubmit="if (!document.querySelector('input[name=id][form=inv-labels-form]:checked')) { document.getElementById('inv-labels-help').classList.add('has-text-danger'); return false; } return true"
 					class="is-flex is-align-items-center is-flex-wrap-wrap mb-3"
 					style="gap: 0.5rem"
@@ -369,7 +447,7 @@ templ InventoryDetailPage(d InventoryDetailData) {
 			if d.CanManage && d.Item.ArchivedAt == nil {
 				<div class="buttons are-small mb-3" style="gap: 0.25rem">
 					<a href={ templ.URL("/admin/inventory/" + d.Item.ID + "/qr.png") } class="button is-outlined is-link">Download QR (PNG)</a>
-					<a href={ templ.URL("/admin/inventory/labels?id=" + d.Item.ID) } target="_blank" class="button is-outlined is-link">Print label</a>
+					<a href={ templ.URL("/admin/inventory/labels?id=" + d.Item.ID) } class="button is-outlined is-link">Print label</a>
 					<span x-data="{ confirming: false }">
 						<button
 							x-show="!confirming"
