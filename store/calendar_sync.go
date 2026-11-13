@@ -144,6 +144,10 @@ func ReconcileFeedEvents(ctx context.Context, pool *pgxpool.Pool, calendarID str
 	normKey := func(title string, start time.Time) naturalKey {
 		return naturalKey{title, start.UTC().Truncate(time.Second).Format(time.RFC3339)}
 	}
+	// Two occurrences with the same title and start can't both be stored (calendar_events is unique on
+	// (calendar_id, title, start_time)), so the first wins and the rest are dropped here. Left in, a
+	// uid-bearing duplicate would count as stored and then collide when its row is renamed.
+	occurrences = dedupeFeedOccurrences(occurrences)
 	fetchedKeys := make(map[string]bool, len(occurrences))
 	incomingNatural := make(map[naturalKey]string, len(occurrences))
 	for _, occ := range occurrences {
@@ -177,40 +181,64 @@ func ReconcileFeedEvents(ctx context.Context, pool *pgxpool.Pool, calendarID str
 		res.Deleted++
 	}
 
-	// Insert new / update changed occurrences.
+	// Work out what to insert and what to update, then apply updates before inserts: an update can vacate a
+	// (title, start) that a new occurrence is about to take.
+	type pendingUpdate struct {
+		row storedFeedRow
+		occ FeedOccurrence
+	}
+	var toInsert []FeedOccurrence
+	var toUpdate []pendingUpdate
 	for _, occ := range occurrences {
 		if occ.UID == "" {
 			// Insert-only; the (calendar_id, title, start_time) unique net dedupes.
-			inserted, err := execFeedInsert(ctx, tx, calendarID, occ)
-			if err != nil {
-				return SyncResult{}, err
-			}
-			res.Inserted += inserted
+			toInsert = append(toInsert, occ)
 			continue
 		}
-		key := feedKey(occ.UID, occ.StartTime)
-		sr, exists := byKey[key]
+		sr, exists := byKey[feedKey(occ.UID, occ.StartTime)]
 		if !exists {
 			// Not stored under this uid — but a legacy row with the same
 			// (title, start) may still exist; it was in `stale` and is gone now.
-			inserted, err := execFeedInsert(ctx, tx, calendarID, occ)
-			if err != nil {
-				return SyncResult{}, err
-			}
-			res.Inserted += inserted
+			toInsert = append(toInsert, occ)
 			continue
 		}
 		if feedRowChanged(sr, occ) {
-			if _, err := tx.Exec(ctx, `
-				UPDATE calendar_events
-				SET title = $1, description = $2, location = $3, url = $4,
-				    end_time = $5, all_day = $6, uid = $7, updated_at = NOW()
-				WHERE id = $8
-			`, occ.Title, occ.Description, occ.Location, occ.URL, occ.EndTime, occ.AllDay, occ.UID, sr.id); err != nil {
-				return SyncResult{}, err
-			}
-			res.Updated++
+			toUpdate = append(toUpdate, pendingUpdate{sr, occ})
 		}
+	}
+
+	// Rows being renamed are parked under a title nothing else can have before any is rewritten, so renames
+	// that swap or chain titles (A takes B's title while B takes another) don't hit the unique constraint
+	// part-way through. Every parked row is rewritten just below, in the same transaction.
+	var renamed []string
+	for _, u := range toUpdate {
+		if u.row.title != u.occ.Title {
+			renamed = append(renamed, u.row.id)
+		}
+	}
+	if len(renamed) > 0 {
+		if _, err := tx.Exec(ctx,
+			`UPDATE calendar_events SET title = 'sync-parked:' || id::text WHERE id = ANY($1::uuid[])`, renamed); err != nil {
+			return SyncResult{}, err
+		}
+	}
+	for _, u := range toUpdate {
+		if _, err := tx.Exec(ctx, `
+			UPDATE calendar_events
+			SET title = $1, description = $2, location = $3, url = $4,
+			    end_time = $5, all_day = $6, uid = $7, updated_at = NOW()
+			WHERE id = $8
+		`, u.occ.Title, u.occ.Description, u.occ.Location, u.occ.URL, u.occ.EndTime, u.occ.AllDay, u.occ.UID, u.row.id); err != nil {
+			return SyncResult{}, err
+		}
+		res.Updated++
+	}
+	for _, occ := range toInsert {
+		inserted, err := execFeedInsert(ctx, tx, calendarID, occ)
+		if err != nil {
+			return SyncResult{}, err
+		}
+		res.Inserted += inserted
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -279,4 +307,24 @@ func timePtrEqual(a, b *time.Time) bool {
 		return a == b
 	}
 	return a.UTC().Equal(b.UTC())
+}
+
+// dedupeFeedOccurrences drops occurrences that repeat an earlier one's title and start time, keeping the
+// first. The order of the rest is unchanged.
+func dedupeFeedOccurrences(in []FeedOccurrence) []FeedOccurrence {
+	type key struct {
+		title string
+		start int64
+	}
+	seen := make(map[key]bool, len(in))
+	out := make([]FeedOccurrence, 0, len(in))
+	for _, occ := range in {
+		k := key{occ.Title, occ.StartTime.UTC().UnixMicro()}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, occ)
+	}
+	return out
 }
