@@ -149,10 +149,10 @@ func TestSetConfigRequiredKeyCannotBeCleared(t *testing.T) {
 	encKey := testhelpers.EncKey()
 
 	h := SetConfig(pool, encKey)
-	req := httptest.NewRequest(http.MethodPut, "/api/config/zoom/webhook_secret",
+	req := httptest.NewRequest(http.MethodPut, "/api/config/slack/bot_token",
 		strings.NewReader(`{"value":""}`))
-	req.SetPathValue("service", "zoom")
-	req.SetPathValue("key", "webhook_secret")
+	req.SetPathValue("service", "slack")
+	req.SetPathValue("key", "bot_token")
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)

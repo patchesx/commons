@@ -180,3 +180,106 @@ func TestListFeedCalendars(t *testing.T) {
 	require.Len(t, cals, 1)
 	assert.Equal(t, feedCal.ID, cals[0].ID)
 }
+
+// A sync that can't store its events must not be a sync that fails forever: titles that collide at the same
+// start time have to resolve, not roll the whole calendar back.
+func TestReconcileTitleCollisions(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2026, 6, 1, 15, 0, 0, 0, time.UTC)
+	other := time.Date(2026, 6, 2, 15, 0, 0, 0, time.UTC)
+
+	titles := func(t *testing.T, pool *pgxpool.Pool, cal *Calendar) map[string]string { // uid -> title
+		t.Helper()
+		rows, err := pool.Query(ctx, `SELECT uid, title FROM calendar_events WHERE calendar_id = $1`, cal.ID)
+		require.NoError(t, err)
+		defer rows.Close()
+		out := map[string]string{}
+		for rows.Next() {
+			var uid, title string
+			require.NoError(t, rows.Scan(&uid, &title))
+			out[uid] = title
+		}
+		return out
+	}
+	seed := func(t *testing.T) (*pgxpool.Pool, *Calendar) {
+		pool, cal := feedCalFixture(t)
+		_, err := ReconcileFeedEvents(ctx, pool, cal.ID, []FeedOccurrence{
+			{UID: "a", Title: "Meeting", StartTime: start},
+			{UID: "b", Title: "Meeting (draft)", StartTime: start},
+			{UID: "z", Title: "Unrelated", StartTime: other},
+		})
+		require.NoError(t, err)
+		return pool, cal
+	}
+
+	t.Run("two events swapping titles at the same start", func(t *testing.T) {
+		pool, cal := seed(t)
+		res, err := ReconcileFeedEvents(ctx, pool, cal.ID, []FeedOccurrence{
+			{UID: "a", Title: "Meeting (draft)", StartTime: start},
+			{UID: "b", Title: "Meeting", StartTime: start},
+			{UID: "z", Title: "Unrelated", StartTime: other},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 2, res.Updated)
+		assert.Equal(t, map[string]string{"a": "Meeting (draft)", "b": "Meeting", "z": "Unrelated"}, titles(t, pool, cal))
+	})
+
+	t.Run("a title moving to where another one just left", func(t *testing.T) {
+		pool, cal := seed(t)
+		_, err := ReconcileFeedEvents(ctx, pool, cal.ID, []FeedOccurrence{
+			{UID: "a", Title: "Meeting (final)", StartTime: start},
+			{UID: "b", Title: "Meeting", StartTime: start},
+			{UID: "z", Title: "Unrelated", StartTime: other},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"a": "Meeting (final)", "b": "Meeting", "z": "Unrelated"}, titles(t, pool, cal))
+	})
+
+	t.Run("a new event can take a title another just vacated", func(t *testing.T) {
+		pool, cal := seed(t)
+		res, err := ReconcileFeedEvents(ctx, pool, cal.ID, []FeedOccurrence{
+			{UID: "n", Title: "Meeting", StartTime: start},
+			{UID: "a", Title: "Meeting (moved)", StartTime: start},
+			{UID: "b", Title: "Meeting (draft)", StartTime: start},
+			{UID: "z", Title: "Unrelated", StartTime: other},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, res.Inserted, "the new event isn't dropped for a conflict that's about to clear")
+		assert.Equal(t, map[string]string{"n": "Meeting", "a": "Meeting (moved)", "b": "Meeting (draft)", "z": "Unrelated"}, titles(t, pool, cal))
+	})
+
+	t.Run("two events that really are the same title and start: the first stays, the sync still succeeds", func(t *testing.T) {
+		pool, cal := seed(t)
+		res, err := ReconcileFeedEvents(ctx, pool, cal.ID, []FeedOccurrence{
+			{UID: "a", Title: "Meeting", StartTime: start},
+			{UID: "b", Title: "Meeting", StartTime: start},
+			{UID: "z", Title: "Unrelated after", StartTime: other},
+		})
+		require.NoError(t, err, "one duplicate doesn't block the calendar")
+		assert.Equal(t, map[string]string{"a": "Meeting", "z": "Unrelated after"}, titles(t, pool, cal))
+		assert.Equal(t, 1, res.Deleted, "b is no longer in the feed as its own event")
+		assert.Equal(t, 1, res.Updated, "and the rest of the feed still applied")
+
+		// Syncing the same feed again changes nothing.
+		again, err := ReconcileFeedEvents(ctx, pool, cal.ID, []FeedOccurrence{
+			{UID: "a", Title: "Meeting", StartTime: start},
+			{UID: "b", Title: "Meeting", StartTime: start},
+			{UID: "z", Title: "Unrelated after", StartTime: other},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, SyncResult{}, again)
+	})
+
+	t.Run("a failed sync still leaves nothing parked", func(t *testing.T) {
+		pool, cal := seed(t)
+		_, err := ReconcileFeedEvents(ctx, pool, cal.ID, []FeedOccurrence{
+			{UID: "a", Title: "Meeting renamed", StartTime: start},
+			{UID: "b", Title: "Meeting (draft)", StartTime: start},
+			{UID: "z", Title: "Unrelated", StartTime: other},
+		})
+		require.NoError(t, err)
+		for _, title := range titles(t, pool, cal) {
+			assert.NotContains(t, title, "sync-parked")
+		}
+	})
+}
