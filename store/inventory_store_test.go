@@ -237,6 +237,43 @@ func TestInventoryApplyCustodyChange(t *testing.T) {
 	assert.Empty(t, held, "archived items are not listed as held")
 }
 
+func TestInventoryHandOffGuard(t *testing.T) {
+	ctx := context.Background()
+	pool := testhelpers.SetupTestDB(t)
+
+	alice := invUser(t, pool, "Alice")
+	bob := invUser(t, pool, "Bob")
+	carol := invUser(t, pool, "Carol")
+	it := invItem(t, pool, "HAND22")
+	invClaim(t, pool, it.ID, alice)
+
+	// Bob is not the holder, so he cannot hand the item to Carol.
+	_, err := ApplyCustodyChange(ctx, pool, CustodyChange{ItemID: it.ID, UserID: carol, FromUserID: bob, Source: "slack"})
+	assert.ErrorIs(t, err, ErrInventoryNotHolder)
+	got, _ := GetInventoryItem(ctx, pool, it.ID)
+	assert.Equal(t, alice, *got.CurrentHolderUserID)
+	events, _ := ListInventoryCustodyEvents(ctx, pool, it.ID)
+	assert.Len(t, events, 1, "a rejected hand-off writes nothing")
+
+	// An unheld item cannot be handed off either.
+	loose := invItem(t, pool, "LOOS22")
+	_, err = ApplyCustodyChange(ctx, pool, CustodyChange{ItemID: loose.ID, UserID: carol, FromUserID: alice, Source: "slack"})
+	assert.ErrorIs(t, err, ErrInventoryNotHolder)
+
+	// The holder can.
+	note := "Handed off by Alice"
+	ev, err := ApplyCustodyChange(ctx, pool, CustodyChange{ItemID: it.ID, UserID: bob, FromUserID: alice, Source: "slack", Note: &note})
+	require.NoError(t, err)
+	assert.Equal(t, alice, *ev.PreviousHolderUserID)
+	assert.Equal(t, "Handed off by Alice", *ev.Note)
+	got, _ = GetInventoryItem(ctx, pool, it.ID)
+	assert.Equal(t, bob, *got.CurrentHolderUserID)
+
+	// Alice no longer holds it, so a stale second hand-off is rejected.
+	_, err = ApplyCustodyChange(ctx, pool, CustodyChange{ItemID: it.ID, UserID: carol, FromUserID: alice, Source: "slack"})
+	assert.ErrorIs(t, err, ErrInventoryNotHolder)
+}
+
 func TestInventoryPendingClaimsAndLinking(t *testing.T) {
 	ctx := context.Background()
 	pool := testhelpers.SetupTestDB(t)
@@ -356,6 +393,49 @@ func TestInventoryRecordVerification(t *testing.T) {
 	assert.NotContains(t, invIDs(due), it.ID, "verification starts a new cycle")
 }
 
+func TestInventoryDispute(t *testing.T) {
+	ctx := context.Background()
+	pool := testhelpers.SetupTestDB(t)
+
+	alice := invUser(t, pool, "Alice")
+	it := invItem(t, pool, "DISP22")
+
+	_, err := RecordInventoryDispute(ctx, pool, it.ID, nil)
+	assert.ErrorIs(t, err, ErrInventoryNoHolder)
+
+	invClaim(t, pool, it.ID, alice)
+	invExec(t, pool, `UPDATE inventory.items SET last_verified_at = NOW() - INTERVAL '10 days',
+		last_reminded_at = NOW() - INTERVAL '6 days' WHERE id = $1`, it.ID)
+	pastGrace, err := ListInventoryItemsPastGrace(ctx, pool)
+	require.NoError(t, err)
+	require.Equal(t, []string{it.ID}, invIDs(pastGrace), "it would be escalated by the grace period")
+
+	note := "Reported via verification reminder"
+	ev, err := RecordInventoryDispute(ctx, pool, it.ID, &note)
+	require.NoError(t, err)
+	assert.Equal(t, "disputed", ev.Status)
+	assert.Equal(t, "slack", ev.Source)
+	assert.Equal(t, alice, *ev.UserID)
+	assert.Nil(t, ev.AppliedAt, "a dispute is not a holder change")
+
+	got, _ := GetInventoryItem(ctx, pool, it.ID)
+	assert.Equal(t, alice, *got.CurrentHolderUserID, "the holder does not change")
+	assert.NotNil(t, got.LastEscalatedAt)
+	pastGrace, err = ListInventoryItemsPastGrace(ctx, pool)
+	require.NoError(t, err)
+	assert.Empty(t, pastGrace, "the grace-period alert does not fire again after a dispute")
+
+	// A dispute is not a custody change, so revert still undoes the claim, not the dispute.
+	_, err = RevertCustody(ctx, pool, it.ID, nil)
+	require.NoError(t, err)
+	got, _ = GetInventoryItem(ctx, pool, it.ID)
+	assert.Nil(t, got.CurrentHolderUserID)
+
+	require.NoError(t, ArchiveInventoryItem(ctx, pool, it.ID))
+	_, err = RecordInventoryDispute(ctx, pool, it.ID, nil)
+	assert.ErrorIs(t, err, ErrInventoryItemArchived)
+}
+
 func TestInventoryVerificationReminders(t *testing.T) {
 	ctx := context.Background()
 	pool := testhelpers.SetupTestDB(t)
@@ -429,6 +509,73 @@ func TestInventoryVerificationReminders(t *testing.T) {
 	// Admins are alerted once per cycle.
 	require.NoError(t, MarkInventoryItemEscalated(ctx, pool, due.ID))
 	assert.Empty(t, pastGrace())
+}
+
+func TestFindUserForClaimEmail(t *testing.T) {
+	ctx := context.Background()
+	pool := testhelpers.SetupTestDB(t)
+
+	primary := invUser(t, pool, "Primary")
+	invExec(t, pool, `UPDATE users SET email = 'primary@example.com' WHERE id = $1`, primary)
+	viaSlack := invUser(t, pool, "Via Slack")
+	invExec(t, pool, `INSERT INTO user_identities (user_id, provider, external_id, external_email)
+		VALUES ($1, 'slack', 'U1', 'Slack.Only@Example.com')`, viaSlack)
+
+	u, err := FindUserForClaimEmail(ctx, pool, "  PRIMARY@Example.com ")
+	require.NoError(t, err)
+	assert.Equal(t, primary, u.ID, "users.email matches case-insensitively")
+
+	u, err = FindUserForClaimEmail(ctx, pool, "slack.only@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, viaSlack, u.ID, "falls back to a single external email")
+
+	_, err = FindUserForClaimEmail(ctx, pool, "nobody@example.com")
+	assert.ErrorIs(t, err, ErrNotFound)
+	_, err = FindUserForClaimEmail(ctx, pool, "   ")
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	// An external email shared by two members is ambiguous, so it is not a match.
+	other := invUser(t, pool, "Other")
+	invExec(t, pool, `INSERT INTO user_identities (user_id, provider, external_id, external_email)
+		VALUES ($1, 'slack', 'U2', 'slack.only@example.com')`, other)
+	_, err = FindUserForClaimEmail(ctx, pool, "slack.only@example.com")
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	// The primary email wins over an external one.
+	invExec(t, pool, `INSERT INTO user_identities (user_id, provider, external_id, external_email)
+		VALUES ($1, 'slack', 'U3', 'primary@example.com')`, other)
+	u, err = FindUserForClaimEmail(ctx, pool, "primary@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, primary, u.ID)
+}
+
+func TestCustodyEventLookupAndPendingCount(t *testing.T) {
+	ctx := context.Background()
+	pool := testhelpers.SetupTestDB(t)
+
+	alice := invUser(t, pool, "Alice")
+	it := invItem(t, pool, "CNT222")
+
+	n, err := CountPendingUnmatched(ctx, pool)
+	require.NoError(t, err)
+	assert.Zero(t, n)
+
+	ev, err := RecordPendingClaim(ctx, pool, it.ID, "Robert", "bob@elsewhere.example", nil, nil)
+	require.NoError(t, err)
+	n, _ = CountPendingUnmatched(ctx, pool)
+	assert.Equal(t, 1, n)
+
+	got, err := GetCustodyEvent(ctx, pool, ev.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "pending_unmatched", got.Status)
+	assert.Equal(t, "Robert", *got.RawName)
+	_, err = GetCustodyEvent(ctx, pool, "00000000-0000-0000-0000-000000000000")
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	_, err = LinkClaimToUser(ctx, pool, ev.ID, alice)
+	require.NoError(t, err)
+	n, _ = CountPendingUnmatched(ctx, pool)
+	assert.Zero(t, n, "a linked claim is no longer pending")
 }
 
 func TestGetUserByUniqueExternalEmail(t *testing.T) {

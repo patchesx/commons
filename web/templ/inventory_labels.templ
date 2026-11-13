@@ -1,0 +1,44 @@
+package admintempl
+
+// InventoryLabelsPage is a standalone printable sheet: no admin chrome, controls hidden when printing.
+templ InventoryLabelsPage(labels []InventoryLabel, ids []string, width float64) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>Inventory labels</title>
+			<style>
+				@page { margin: 0.4in; }
+				body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 1rem; color: #000; background: #fff; }
+				.controls { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; font-size: 14px; }
+				.controls input[type=number] { width: 5rem; }
+				.sheet { display: flex; flex-wrap: wrap; gap: 0.15in; }
+				.label { box-sizing: border-box; border: 1px dashed #888; text-align: center; break-inside: avoid; }
+				.label-code { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 700; letter-spacing: 0.08em; line-height: 1; }
+				.label-name { line-height: 1.15; overflow-wrap: anywhere; }
+				@media print { .controls { display: none; } body { padding: 0; } }
+			</style>
+		</head>
+		<body>
+			<form class="controls" method="get" action="/admin/inventory/labels">
+				for _, id := range ids {
+					<input type="hidden" name="id" value={ id }/>
+				}
+				<label for="label-width">Label width (inches)</label>
+				<input id="label-width" type="number" name="width" min="0.75" max="6" step="0.25" value={ invWidthValue(width) }/>
+				<button type="submit">Apply</button>
+				<button type="button" onclick="window.print()">Print</button>
+			</form>
+			<div class="sheet">
+				for _, l := range labels {
+					<div class="label" style={ templ.SafeCSS(invLabelCSS(width)) }>
+						<div class="label-code" style={ templ.SafeCSS(invCodeCSS(width)) }>{ l.Code }</div>
+						@templ.Raw(l.SVG)
+						<div class="label-name" style={ templ.SafeCSS(invNameCSS(width)) }>{ l.Name }</div>
+					</div>
+				}
+			</div>
+		</body>
+	</html>
+}

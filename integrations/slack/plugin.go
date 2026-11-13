@@ -31,6 +31,9 @@ func (p *SlackPlugin) Init(pctx plugin.PluginContext) error {
 	Init(pool, encKey)
 	StartRetryDrainer(pool)
 
+	// Building the client for the stored token registers the workspace IDs (see getClient).
+	go getClient(context.Background())
+
 	pctx.SetNotifier(NewNotifier(pool))
 
 	// Register webhook processors and seed their types into the DB.

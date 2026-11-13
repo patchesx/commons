@@ -1,12 +1,14 @@
 package adminui
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"commons/platform"
 	"commons/plugin"
+	"commons/web"
 	admintempl "commons/web/templ"
 )
 
@@ -16,6 +18,18 @@ type Deps struct {
 	SessionSecret string
 	Notifier      platform.Notifier
 	Pctx          plugin.PluginContext
+
+	// Imports makes an inventory import preview confirmable only once and keeps its result page reloadable.
+	// Nil skips both, and the result is shown straight from the confirm request.
+	Imports *ImportState
+	// ClaimLimiter rate-limits the public inventory claim form. Nil disables limiting.
+	ClaimLimiter *web.RateLimiter
+	// NotifyUnmatchedClaim tells inventory admins about a claim whose email matched no member. Nil skips it.
+	NotifyUnmatchedClaim func(ctx context.Context, eventID string)
+	// NotifyClaimApplied tells a member that a web-form check-in with their email gave them an item. Nil skips it.
+	NotifyClaimApplied func(ctx context.Context, itemID, userID string)
+	// NotifyClaimLinked tells a member that an admin linked a web-form claim to them. Nil skips it.
+	NotifyClaimLinked func(ctx context.Context, itemID, userID string)
 }
 
 func FragmentError(w http.ResponseWriter, r *http.Request, msg string) {

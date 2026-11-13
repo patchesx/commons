@@ -21,9 +21,9 @@ import (
 	_ "commons/integrations/matrix"
 	_ "commons/integrations/nextcloud"
 	_ "commons/integrations/s3storage"
+	slackpkg "commons/integrations/slack"
 	_ "commons/integrations/solidaritytech"
 	_ "commons/integrations/vimeo"
-	slackpkg "commons/integrations/slack"
 	ytpkg "commons/integrations/youtube"
 	_ "commons/integrations/zoom"
 
@@ -34,8 +34,8 @@ import (
 	"commons/install"
 	"commons/jobs"
 	"commons/legislation"
-	"commons/plugin"
 	"commons/pipeline"
+	"commons/plugin"
 	"commons/scheduler"
 	"commons/store"
 	"commons/web"
@@ -145,12 +145,26 @@ func main() {
 	plugin.RegisterActionType(&callbackAction{
 		id:    "jobs.calendar_reminders",
 		label: "Send Calendar Reminders",
-		fn:    func(ctx context.Context) error { slackpkg.SendCalendarReminders(ctx, pool, cfg.EncryptionKey); return nil },
+		fn: func(ctx context.Context) error {
+			slackpkg.SendCalendarReminders(ctx, pool, cfg.EncryptionKey)
+			return nil
+		},
+	})
+	plugin.RegisterActionType(&callbackAction{
+		id:    "jobs.inventory_verify",
+		label: "Send Inventory Verification Reminders",
+		fn: func(ctx context.Context) error {
+			slackpkg.SendInventoryVerificationReminders(ctx, pool, cfg.EncryptionKey)
+			return nil
+		},
 	})
 	plugin.RegisterActionType(&callbackAction{
 		id:    "legislation.sync",
 		label: "Legislation Sync",
-		fn:    func(ctx context.Context) error { legislation.Sync(ctx, pool, cfg.EncryptionKey, pctx.Notifier()); return nil },
+		fn: func(ctx context.Context) error {
+			legislation.Sync(ctx, pool, cfg.EncryptionKey, pctx.Notifier())
+			return nil
+		},
 	})
 	plugin.FinalizeActionTypes()
 	eventRunner := events.NewRunner(pool, cfg.EncryptionKey)
@@ -164,6 +178,7 @@ func main() {
 	seedManagedTrigger(pool, "jobs", "Library Overdue Reminders", "1m", "jobs.library_overdue")
 	seedManagedTrigger(pool, "jobs", "Calendar Feed Sync", "30m", "jobs.calendar_feed_sync")
 	seedManagedTrigger(pool, "jobs", "Calendar Reminders", "1m", "jobs.calendar_reminders")
+	seedManagedTrigger(pool, "jobs", "Inventory Verification Reminders", "1h", "jobs.inventory_verify")
 
 	// Start the scheduled trigger runner (fires scheduled trigger pipelines).
 	go scheduler.Run(context.Background(), pool, cfg.EncryptionKey, pctx)
@@ -188,6 +203,17 @@ func main() {
 		SessionSecret: cfg.SessionSecret,
 		Notifier:      pctx.Notifier(),
 		Pctx:          pctx,
+		Imports:       adminui.NewImportState(),
+		ClaimLimiter:  web.NewRateLimiter(),
+		NotifyUnmatchedClaim: func(ctx context.Context, eventID string) {
+			slackpkg.NotifyUnmatchedInventoryClaim(ctx, pool, eventID)
+		},
+		NotifyClaimApplied: func(ctx context.Context, itemID, userID string) {
+			slackpkg.NotifyWebClaimApplied(ctx, pool, itemID, userID)
+		},
+		NotifyClaimLinked: func(ctx context.Context, itemID, userID string) {
+			slackpkg.NotifyClaimLinked(ctx, pool, itemID, userID)
+		},
 	}
 
 	loginLimiter := web.NewLoginLimiter()
@@ -257,6 +283,46 @@ func main() {
 	mux.Handle("POST /admin/fragments/calendars/{calId}/events", webAuth(admin.CalendarsEventCreate()))
 	mux.Handle("PATCH /admin/fragments/calendars/{calId}/events/{eventId}", webAuth(admin.CalendarsEventUpdate()))
 	mux.Handle("DELETE /admin/fragments/calendars/{calId}/events/{eventId}", webAuth(admin.CalendarsEventDelete()))
+
+	// Inventory claim page: public, opened by the QR code on an item's label. No session; rate limited per IP and
+	// per code, and it never shows member data.
+	mux.Handle("GET /inventory/{code}", admin.InventoryClaimPage())
+	mux.Handle("POST /inventory/{code}", admin.InventoryClaimSubmit())
+
+	// Inventory — items, detail, custom fields. Each handler checks its own inventory.* permission.
+	mux.Handle("GET /admin/inventory", webAuth(admin.InventoryPage()))
+	mux.Handle("GET /admin/inventory/fields", webAuth(admin.InventoryFieldsPage()))
+	mux.Handle("GET /admin/inventory/import", webAuth(admin.InventoryImportPage()))
+	mux.Handle("GET /admin/inventory/import-template.csv", webAuth(admin.InventoryImportTemplate()))
+	mux.Handle("POST /admin/inventory/import", webAuth(admin.InventoryImportUpload()))
+	mux.Handle("POST /admin/inventory/import/confirm", webAuth(admin.InventoryImportConfirm()))
+	mux.Handle("GET /admin/inventory/import/result", webAuth(admin.InventoryImportResult()))
+	mux.Handle("GET /admin/inventory/grid", webAuth(admin.InventoryGridPage()))
+	mux.Handle("GET /admin/inventory/grid.csv", webAuth(admin.InventoryGridCSV()))
+	mux.Handle("GET /admin/fragments/inventory-grid", webAuth(admin.InventoryGridFragment()))
+	mux.Handle("GET /admin/fragments/inventory-grid/{id}/cell/{col}", webAuth(admin.InventoryGridCell()))
+	mux.Handle("GET /admin/fragments/inventory-grid/{id}/cell/{col}/edit", webAuth(admin.InventoryGridCellEdit()))
+	mux.Handle("PATCH /admin/fragments/inventory-grid/{id}/cell/{col}", webAuth(admin.InventoryGridCellSave()))
+	mux.Handle("GET /admin/inventory/claims", webAuth(admin.InventoryClaimsPage()))
+	mux.Handle("GET /admin/fragments/inventory/claims-count", webAuth(admin.InventoryClaimsCount()))
+	mux.Handle("POST /admin/fragments/inventory/claims/{id}/link", webAuth(admin.InventoryClaimLink()))
+	mux.Handle("GET /admin/inventory/labels", webAuth(admin.InventoryLabels()))
+	mux.Handle("GET /admin/inventory/{id}/qr.png", webAuth(admin.InventoryQRPNG()))
+	mux.Handle("GET /admin/inventory/{id}", webAuth(admin.InventoryDetailPage()))
+	mux.Handle("GET /admin/fragments/inventory-table", webAuth(admin.InventoryTable()))
+	mux.Handle("GET /admin/fragments/inventory/new-modal", webAuth(admin.InventoryNewModal()))
+	mux.Handle("GET /admin/fragments/inventory/{id}/edit-modal", webAuth(admin.InventoryEditModal()))
+	mux.Handle("POST /admin/fragments/inventory", webAuth(admin.InventoryCreate()))
+	mux.Handle("PUT /admin/fragments/inventory/{id}", webAuth(admin.InventoryUpdate()))
+	mux.Handle("POST /admin/fragments/inventory/{id}/archive", webAuth(admin.InventoryArchive()))
+	mux.Handle("POST /admin/fragments/inventory/{id}/restore", webAuth(admin.InventoryRestore()))
+	mux.Handle("POST /admin/fragments/inventory/{id}/rotate-code", webAuth(admin.InventoryRotateCode()))
+	mux.Handle("POST /admin/fragments/inventory/{id}/accessories", webAuth(admin.InventoryAccessoryAdd()))
+	mux.Handle("DELETE /admin/fragments/inventory/{id}/accessories/{accessoryID}", webAuth(admin.InventoryAccessoryDelete()))
+	mux.Handle("POST /admin/fragments/inventory-fields", webAuth(admin.InventoryFieldsCreate()))
+	mux.Handle("PUT /admin/fragments/inventory-fields/{id}", webAuth(admin.InventoryFieldsUpdate()))
+	mux.Handle("DELETE /admin/fragments/inventory-fields/{id}", webAuth(admin.InventoryFieldsDelete()))
+	mux.Handle("POST /admin/fragments/inventory-fields/{id}/move", webAuth(admin.InventoryFieldsMove()))
 
 	// Integrations — list, detail, add modal/config fields, save.
 	mux.Handle("GET /admin/integrations", webAuth(admin.IntegrationsPage()))

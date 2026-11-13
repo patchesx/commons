@@ -1,0 +1,97 @@
+package admintempl
+
+// InventoryClaimPageData backs the public page a label's QR code opens.
+type InventoryClaimPageData struct {
+	Action   string // where the form posts: the page's own path
+	ItemName string
+	Code     string // formatted for display, for example K7M-4QX
+	Name     string
+	Email    string
+	Error    string
+	Done     bool
+}
+
+templ inventoryClaimHead(title string) {
+	<head>
+		<meta charset="UTF-8"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+		<meta name="robots" content="noindex, nofollow"/>
+		<title>{ title }</title>
+		<link rel="stylesheet" href={ templ.URL(AssetURL("bulma.min.css")) }/>
+		<link rel="stylesheet" href={ templ.URL(AssetURL("app.css")) }/>
+	</head>
+}
+
+// InventoryClaimPage is the unauthenticated check-in page: no admin chrome, no member data. Whatever the
+// visitor enters, and whether or not their email matches a member, they see the same confirmation.
+templ InventoryClaimPage(d InventoryClaimPageData) {
+	<!DOCTYPE html>
+	<html lang="en">
+		@inventoryClaimHead("Check in " + d.ItemName)
+		<body>
+			<section class="section">
+				<div class="container" style="max-width: 32rem">
+					<div class="box">
+						<p class="title is-5 mb-1">{ d.ItemName }</p>
+						<p class="is-family-monospace has-text-grey mb-4">{ d.Code }</p>
+						if d.Done {
+							<div class="notification is-success is-light" role="status">
+								Thanks, your check-in has been recorded. If we can't match your email address to a member, an administrator will follow up with you.
+							</div>
+						} else {
+							@AlertBox(d.Error, "error")
+							<form method="post" action={ templ.URL(d.Action) }>
+								<div style="position: absolute; left: -9999px" aria-hidden="true">
+									<label>Leave this empty <input type="text" name="website" tabindex="-1" autocomplete="off"/></label>
+								</div>
+								<div class="field">
+									<label for="claim-name" class="label is-small">Your name</label>
+									<div class="control">
+										<input id="claim-name" type="text" name="name" value={ d.Name } required maxlength="200" autocomplete="name" class="input"/>
+									</div>
+								</div>
+								<div class="field">
+									<label for="claim-email" class="label is-small">Your email address</label>
+									<div class="control">
+										<input id="claim-email" type="email" name="email" value={ d.Email } required maxlength="254" autocomplete="email" class="input"/>
+										<em>Please use the email associated with your membership</em>
+									</div>
+								</div>
+								<div class="field">
+									<label class="checkbox">
+										<input type="checkbox" name="confirm" required/>
+										I am taking possession of { d.ItemName }.
+									</label>
+								</div>
+								<div class="field">
+									<button type="submit" class="button is-primary is-fullwidth">Confirm check-in</button>
+								</div>
+							</form>
+						}
+					</div>
+					<p class="is-size-7 has-text-grey">
+						You can also check this item in through Slack: send the Commons app a direct message: <code>Checkout { d.Code }</code>
+					</p>
+				</div>
+			</section>
+		</body>
+	</html>
+}
+
+// InventoryClaimNotFoundPage is shown for an unknown or archived code.
+templ InventoryClaimNotFoundPage() {
+	<!DOCTYPE html>
+	<html lang="en">
+		@inventoryClaimHead("Item not found")
+		<body>
+			<section class="section">
+				<div class="container" style="max-width: 32rem">
+					<div class="box">
+						<p class="title is-5">We couldn't find that item</p>
+						<p>Check the code printed on the item's label and scan the code again.</p>
+					</div>
+				</div>
+			</section>
+		</body>
+	</html>
+}

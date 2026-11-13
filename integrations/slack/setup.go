@@ -159,6 +159,7 @@ settings:
     request_url: %s/webhook/%s
     bot_events:
       - app_home_opened
+      - message.im
       - team_join
   interactivity:
     is_enabled: true

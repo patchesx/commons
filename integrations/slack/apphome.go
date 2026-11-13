@@ -274,6 +274,19 @@ func Publish(ctx context.Context, pool *pgxpool.Pool, encKey []byte, client *sla
 			slacklib.NewTextBlockObject(slacklib.PlainTextType, ":memo: Report Issue", true, false),
 		))
 	}
+
+	if hasPermission(perms, permissions.InventoryView) {
+		// Inventory is open to every member: claiming and verifying items need no permission. InventoryView used like a feature flag.
+		actionButtons = append(actionButtons, slacklib.NewButtonBlockElement(
+			ActionOpenInventory, "open",
+			slacklib.NewTextBlockObject(slacklib.PlainTextType, ":clipboard: My Inventory", true, false),
+		))
+		// Browsing the whole inventory is read-only and open to every member, so people can see who has an item.
+		actionButtons = append(actionButtons, slacklib.NewButtonBlockElement(
+			ActionInventoryBrowseOpen, "open",
+			slacklib.NewTextBlockObject(slacklib.PlainTextType, ":mag: Browse Inventory", true, false),
+		))
+	}
 	isAdmin := hasPermission(perms, permissions.RecordingsConfigWrite) || hasPermission(perms, permissions.UploadsConfigWrite)
 	if isAdmin {
 		adminURL, _ := store.GetServiceConfig(ctx, pool, "bot", "admin_url", encKey)

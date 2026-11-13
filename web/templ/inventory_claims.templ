@@ -1,0 +1,81 @@
+package admintempl
+
+import "commons/store"
+
+// InventoryMemberOption is one choice in the "link to member" picker.
+type InventoryMemberOption struct {
+	ID    string
+	Label string
+}
+
+templ InventoryClaimsPage(claims []store.PendingClaim, members []InventoryMemberOption) {
+	@Layout("Unmatched Claims", "/admin/inventory/claims") {
+		<div>
+			<h1 class="title is-4 mb-3">Unmatched Claims</h1>
+			@PageHelp() {
+				Someone scanned an item's QR code and entered an email address that doesn't match a member. The item's holder stays the same until you link the claim to the right member, who then takes possession.
+			}
+			<div class="card mb-4">
+				<div class="table-container">
+					<table class="table is-fullwidth is-narrow mb-0">
+						<thead>
+							<tr>
+								<th>Item</th>
+								<th>Claimed by</th>
+								<th class="is-hidden-mobile">Previous holder</th>
+								<th class="is-hidden-mobile">When</th>
+								<th>Link to member</th>
+							</tr>
+						</thead>
+						<tbody>
+							if len(claims) == 0 {
+								<tr>
+									<td colspan="5" class="has-text-centered py-5">
+										@EmptyState("No unmatched claims.")
+									</td>
+								</tr>
+							}
+							for _, c := range claims {
+								<tr>
+									<td>
+										<div class="has-text-weight-semibold">
+											<a href={ templ.URL("/admin/inventory/" + c.ItemID) } class="has-text-link">{ c.ItemName }</a>
+										</div>
+										<div class="is-family-monospace is-size-7 has-text-grey">{ store.FormatInventoryCode(c.ItemCode) }</div>
+									</td>
+									<td>
+										<div>{ invHolder(invStr(c.RawName)) }</div>
+										<div class="is-size-7 has-text-grey">{ invStr(c.RawEmail) }</div>
+									</td>
+									<td class="is-hidden-mobile is-size-7">{ invHolder(invStr(c.PreviousHolderName)) }</td>
+									<td class="is-hidden-mobile is-size-7" style="white-space: nowrap">{ invDateTime(c.CreatedAt) }</td>
+									<td>
+										<form
+											hx-post={ "/admin/fragments/inventory/claims/" + c.ID + "/link" }
+											hx-target="next .claim-result"
+											hx-swap="innerHTML"
+											hx-on:htmx:after-request="if(event.detail.xhr.status === 204) location.reload()"
+											class="is-flex"
+											style="gap: 0.5rem"
+										>
+											<div class="select is-small">
+												<select name="user_id" required aria-label="Member">
+													<option value="">Choose a member…</option>
+													for _, m := range members {
+														<option value={ m.ID }>{ m.Label }</option>
+													}
+												</select>
+											</div>
+											<button type="submit" class="button is-small is-primary">Link</button>
+										</form>
+										<div class="claim-result"></div>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
+	}
+}
