@@ -81,6 +81,10 @@ CREATE TABLE IF NOT EXISTS inventory.field_definitions (
 -- ---------------------------------------------------------------------------
 -- Email fallback for the web claim form: match on user_identities.external_email.
 -- ---------------------------------------------------------------------------
+-- Databases that predate migration 101 can have a user_identities table without this column, because 101
+-- only creates the table when it is missing. Add it first so the index below can be built (a no-op elsewhere).
+ALTER TABLE user_identities ADD COLUMN IF NOT EXISTS external_email TEXT;
+
 CREATE INDEX IF NOT EXISTS user_identities_external_email_lower_idx
     ON user_identities (lower(external_email)) WHERE external_email IS NOT NULL;
 
