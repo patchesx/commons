@@ -124,6 +124,7 @@ func TestInventoryPermissionGates(t *testing.T) {
 		{"update", d.InventoryUpdate(), invReq{method: "PUT", target: "/x", path: id, form: url.Values{"name": {"n"}}}},
 		{"qr png", d.InventoryQRPNG(), invReq{method: "GET", target: "/x", path: id}},
 		{"labels", d.InventoryLabels(), invReq{method: "GET", target: "/x?id=" + item.ID}},
+		{"labels pdf", d.InventoryLabelsPDF(), invReq{method: "GET", target: "/x?id=" + item.ID}},
 		{"rotate code", d.InventoryRotateCode(), invReq{method: "POST", target: "/x", path: id}},
 		{"archive", d.InventoryArchive(), invReq{method: "POST", target: "/x", path: id}},
 		{"restore", d.InventoryRestore(), invReq{method: "POST", target: "/x", path: id}},

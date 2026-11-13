@@ -10,6 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.1
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/emersion/go-ical v0.0.0-20250609112844-439c63cef608
+	github.com/go-pdf/fpdf v0.9.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/slack-go/slack v0.18.0
 	github.com/stretchr/testify v1.11.1

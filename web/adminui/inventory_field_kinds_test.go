@@ -102,7 +102,9 @@ func TestInventoryGridDropdownCell(t *testing.T) {
 		}
 	}
 	require.NoError(t, store.SetInventoryFieldKind(ctx, f.d.Pool, serial.ID, store.InventoryFieldSelect, []string{"SN-100", "SN-200"}))
-	cell := func(it *store.InventoryItem) map[string]string { return map[string]string{"id": it.ID, "col": "field:serial"} }
+	cell := func(it *store.InventoryItem) map[string]string {
+		return map[string]string{"id": it.ID, "col": "field:serial"}
+	}
 
 	t.Run("the editor is a dropdown with the current value selected", func(t *testing.T) {
 		body := f.get(t, f.d.InventoryGridCellEdit(), f.manager, "/x", cell(f.projector)).Body.String()
