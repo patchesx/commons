@@ -74,6 +74,11 @@ func handleDirectMessage(ctx context.Context, pool *pgxpool.Pool, encKey []byte,
 	}
 	d := dmContext{pool: pool, encKey: encKey, client: client, slackUserID: slackUserID}
 
+	// An author in the middle of a broadcast draft is writing it, not giving a command.
+	if handleBroadcastDraftMessage(ctx, d, evt.Text) || handlePollDraftMessage(ctx, d, evt.Text) {
+		return
+	}
+
 	prefix, args := splitDMCommand(evt.Text)
 	for _, c := range dmCommands {
 		if strings.EqualFold(c.Prefix, prefix) {

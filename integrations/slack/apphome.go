@@ -275,6 +275,19 @@ func Publish(ctx context.Context, pool *pgxpool.Pool, encKey []byte, client *sla
 		))
 	}
 
+	if hasPermission(perms, permissions.BroadcastSend) {
+		actionButtons = append(actionButtons, slacklib.NewButtonBlockElement(
+			ActionBroadcastNew, "open",
+			slacklib.NewTextBlockObject(slacklib.PlainTextType, ":mega: Broadcast", true, false),
+		))
+	}
+	if hasPermission(perms, permissions.PollCreate) {
+		actionButtons = append(actionButtons, slacklib.NewButtonBlockElement(
+			ActionPollNew, "open",
+			slacklib.NewTextBlockObject(slacklib.PlainTextType, ":bar_chart: Emoji Straw Poll", true, false),
+		))
+	}
+
 	if hasPermission(perms, permissions.InventoryView) {
 		// Inventory is open to every member: claiming and verifying items need no permission. InventoryView used like a feature flag.
 		actionButtons = append(actionButtons, slacklib.NewButtonBlockElement(

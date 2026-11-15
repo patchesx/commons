@@ -1,6 +1,7 @@
 package slack
 
 import (
+	_ "embed"
 	"net/http"
 
 	"commons/internal/httpx"
@@ -29,5 +30,20 @@ func HandleListSlackEmojis() http.HandlerFunc {
 			return
 		}
 		httpx.WriteJSON(w, http.StatusOK, emojis)
+	}
+}
+
+// standardEmojiJSON is the standard emoji set the composer's picker and preview use. See emoji/README.md.
+//
+//go:embed emoji/standard.json
+var standardEmojiJSON []byte
+
+// HandleStandardEmojis handles GET /api/slack/emojis/standard. The data only changes with the binary, so
+// browsers may keep it for a day.
+func HandleStandardEmojis() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+		w.Write(standardEmojiJSON)
 	}
 }

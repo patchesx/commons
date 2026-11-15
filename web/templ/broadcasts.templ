@@ -1,0 +1,286 @@
+package admintempl
+
+import (
+	"strconv"
+	"time"
+)
+
+// BroadcastView backs a row on the history page and the header of the detail page.
+type BroadcastView struct {
+	ID          string
+	AuthorName  string
+	Body        string
+	Sending     bool
+	Scheduled   bool // waiting for ScheduledFor
+	Cancelled   bool
+	CreatedAt   time.Time
+	CompletedAt *time.Time
+	// ScheduledFor is when sending was set to start, if it was scheduled.
+	ScheduledFor *time.Time
+	Total       int
+	Sent        int
+	Failed      int
+	Pending     int
+}
+
+// BroadcastRecipientView is one member's delivery result.
+type BroadcastRecipientView struct {
+	DisplayName string
+	Status      string
+	Error       string
+	SentAt      *time.Time
+}
+
+func broadcastTime(t time.Time) string {
+	return t.Format("Jan 2, 2006 3:04 PM")
+}
+
+func broadcastPreview(body string) string {
+	r := []rune(body)
+	if len(r) > 120 {
+		return string(r[:120]) + "…"
+	}
+	return body
+}
+
+// BroadcastScheduleOpts configures the schedule picker in the send modal.
+type BroadcastScheduleOpts struct {
+	Timezone string // IANA name of the organization's timezone, which the picked time is read in
+	Min      string // earliest pickable time, as a datetime-local value in that timezone
+}
+
+// broadcastWhen is when the broadcast went, or goes, out.
+func broadcastWhen(b BroadcastView) string {
+	if b.ScheduledFor != nil {
+		return broadcastTime(*b.ScheduledFor)
+	}
+	return broadcastTime(b.CreatedAt)
+}
+
+func broadcastPolls(b BroadcastView) bool {
+	return b.Sending || b.Scheduled
+}
+
+func broadcastCancelHint(b BroadcastView) string {
+	return "return confirm('Cancel this scheduled broadcast? Nothing will be sent.')"
+}
+
+templ BroadcastsPage(broadcasts []BroadcastView) {
+	@Layout("Broadcasts", "/admin/broadcasts") {
+		<div>
+			<div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+				<h1 class="title is-4 mb-0">Broadcasts</h1>
+				<a href="/admin/broadcasts/new" class="button is-primary is-small">New broadcast</a>
+			</div>
+			@PageHelp() {
+				A broadcast is one message sent as a Slack DM to every active member. This is the history of what was sent and who sent it.
+			}
+			<div class="card">
+				<div class="table-container">
+					<table class="table is-fullwidth is-hoverable is-narrow mb-0">
+						<thead>
+							<tr>
+								<th>When</th>
+								<th>By</th>
+								<th>Message</th>
+								<th>Delivery Status</th>
+								<th></th>
+							</tr>
+						</thead>
+						if len(broadcasts) == 0 {
+							<tbody>
+								<tr>
+									<td colspan="5" class="has-text-centered py-6">
+										@EmptyState("No broadcasts yet.")
+									</td>
+								</tr>
+							</tbody>
+						}
+						for _, b := range broadcasts {
+							<tbody>
+								<tr>
+									<td class="is-size-7" style="white-space: nowrap">{ broadcastWhen(b) }</td>
+									<td class="is-size-7" style="white-space: nowrap">{ b.AuthorName }</td>
+									<td class="is-size-7" style="max-width: 28rem">{ broadcastPreview(b.Body) }</td>
+									<td class="is-size-7" style="white-space: nowrap">
+										if b.Scheduled {
+											@StatusBadge("scheduled", "blue")
+										} else if b.Cancelled {
+											@StatusBadge("cancelled", "gray")
+										} else {
+											{ strconv.Itoa(b.Sent) } / { strconv.Itoa(b.Total) } delivered
+										}
+										if b.Sending {
+											@StatusBadge("sending", "yellow")
+										}
+										if b.Failed > 0 {
+											@StatusBadge(strconv.Itoa(b.Failed)+" failed", "red")
+										}
+									</td>
+									<td class="has-text-right"><a href={ templ.SafeURL("/admin/broadcasts/" + b.ID) }>View</a></td>
+								</tr>
+							</tbody>
+						}
+					</table>
+				</div>
+			</div>
+		</div>
+	}
+}
+
+templ BroadcastNewPage(opts SlackComposerOpts, recipients int, configured bool, errMsg string, schedule BroadcastScheduleOpts) {
+	@Layout("New Broadcast", "/admin/broadcasts") {
+		<div>
+			<h1 class="title is-4 mb-3">New broadcast</h1>
+			@PageHelp() {
+				Sent as a Slack DM from the bot to every active, non-bot member with a Slack account. Use { "{{member_name}}" } to address each member by name.
+			}
+			if !configured {
+				<div class="notification is-warning is-light">Slack is not connected: no bot token is configured, so a broadcast cannot be sent.</div>
+			}
+			if errMsg != "" {
+				<div class="notification is-danger is-light">{ errMsg }</div>
+			}
+			<div class="card">
+				<div class="card-content">
+					<form x-data="{ open: false, at: '' }" method="post" action="/admin/broadcasts">
+						@SlackMessageComposer(opts)
+						<p class="is-size-7 has-text-grey mb-3">This will reach { strconv.Itoa(recipients) } members.</p>
+						<div class="buttons">
+							<button type="button" @click="open = true" class="button is-primary" disabled?={ !configured || recipients == 0 }>Send</button>
+							<a href="/admin/broadcasts" class="button is-light">Cancel</a>
+						</div>
+						<div class="modal" :class="open ? 'is-active' : ''" @keydown.escape.window="open = false">
+							<div class="modal-background" @click="open = false"></div>
+							<div class="modal-card" style="max-width: 28rem">
+								<header class="modal-card-head">
+									<p class="modal-card-title">Send broadcast</p>
+									<button type="button" class="delete" aria-label="close" @click="open = false"></button>
+								</header>
+								<section class="modal-card-body">
+									<p class="mb-4">This sends a DM to { strconv.Itoa(recipients) } members. It cannot be recalled once sending starts.</p>
+									<button type="submit" name="mode" value="now" class="button is-primary is-fullwidth mb-5">Send now</button>
+									<div class="field">
+										<label for="broadcast-send-at" class="label is-small">Or send later ({ schedule.Timezone })</label>
+										<div class="control">
+											<input
+												id="broadcast-send-at"
+												type="datetime-local"
+												name="send_at"
+												min={ schedule.Min }
+												x-model="at"
+												@keydown.enter.prevent
+												class="input"
+											/>
+										</div>
+									</div>
+								</section>
+								<footer class="modal-card-foot">
+									<button type="submit" name="mode" value="schedule" class="button is-link" :disabled="!at">Schedule message</button>
+									<button type="button" class="button is-light" @click="open = false">Back</button>
+								</footer>
+							</div>
+						</div>
+					</form>
+				</div>
+			</div>
+		</div>
+	}
+}
+
+templ BroadcastDetailPage(b BroadcastView, recipients []BroadcastRecipientView) {
+	@Layout("Broadcast", "/admin/broadcasts") {
+		<div>
+			<p class="mb-2"><a href="/admin/broadcasts">&larr; Broadcasts</a></p>
+			<h1 class="title is-4 mb-3">Broadcast</h1>
+			@BroadcastDetail(b, recipients)
+		</div>
+	}
+}
+
+// BroadcastDetail polls itself while the broadcast is still sending.
+templ BroadcastDetail(b BroadcastView, recipients []BroadcastRecipientView) {
+	<div
+		id="broadcast-detail"
+		if broadcastPolls(b) {
+			hx-get={ "/admin/fragments/broadcasts/" + b.ID }
+			hx-trigger="every 3s"
+			hx-swap="outerHTML"
+		}
+	>
+		<div class="card mb-4">
+			<div class="card-content">
+				<p class="is-size-7 has-text-grey mb-2">
+					if b.ScheduledFor != nil {
+						Scheduled by { b.AuthorName } on { broadcastTime(b.CreatedAt) }, to send at { broadcastTime(*b.ScheduledFor) }
+					} else {
+						Sent by { b.AuthorName } on { broadcastTime(b.CreatedAt) }
+					}
+					if b.CompletedAt != nil {
+						, finished { broadcastTime(*b.CompletedAt) }
+					}
+				</p>
+				<pre class="mb-3" style="white-space: pre-wrap">{ b.Body }</pre>
+				<div class="tags">
+					if b.Scheduled {
+						@StatusBadge("scheduled", "blue")
+					} else if b.Cancelled {
+						@StatusBadge("cancelled", "gray")
+					} else if b.Sending {
+						@StatusBadge("sending", "yellow")
+					} else {
+						@StatusBadge("done", "green")
+					}
+					if !b.Scheduled && !b.Cancelled {
+						<span class="tag is-light">{ strconv.Itoa(b.Sent) } sent</span>
+						<span class="tag is-light">{ strconv.Itoa(b.Pending) } pending</span>
+					}
+					if b.Failed > 0 {
+						<span class="tag is-danger is-light">{ strconv.Itoa(b.Failed) } failed</span>
+					}
+				</div>
+				if b.Scheduled {
+					<form method="post" action={ templ.SafeURL("/admin/broadcasts/" + b.ID + "/cancel") } x-data @submit={ broadcastCancelHint(b) }>
+						<button type="submit" class="button is-small is-danger is-outlined">Cancel broadcast</button>
+					</form>
+				}
+				if b.Failed > 0 && !b.Sending {
+					<form method="post" action={ templ.SafeURL("/admin/broadcasts/" + b.ID + "/retry") }>
+						<button type="submit" class="button is-small is-primary is-outlined">Retry failed</button>
+					</form>
+				}
+			</div>
+		</div>
+		<div class="card">
+			<div class="table-container">
+				<table class="table is-fullwidth is-narrow mb-0">
+					<thead>
+						<tr>
+							<th>Member</th>
+							<th>Status</th>
+							<th class="is-hidden-mobile">Detail</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, r := range recipients {
+							<tr>
+								<td class="is-size-7">{ r.DisplayName }</td>
+								<td>
+									switch r.Status {
+										case "sent":
+											@StatusBadge("sent", "green")
+										case "failed":
+											@StatusBadge("failed", "red")
+										default:
+											@StatusBadge("pending", "gray")
+									}
+								</td>
+								<td class="is-hidden-mobile is-size-7 has-text-grey">{ r.Error }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+}

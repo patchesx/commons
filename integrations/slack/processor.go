@@ -92,9 +92,19 @@ func (p *SlackInteractionsProcessor) DataSchema() []plugin.DataFieldDef { return
 
 // Extract verifies the Slack signature and returns raw_body for downstream actions.
 // The actual interaction routing is handled by the slack.handle_interactions action type.
-func (p *SlackInteractionsProcessor) Extract(_ context.Context, w http.ResponseWriter, r *http.Request, payload []byte, _ store.Webhook) (map[string]any, error) {
+func (p *SlackInteractionsProcessor) Extract(ctx context.Context, w http.ResponseWriter, r *http.Request, payload []byte, _ store.Webhook) (map[string]any, error) {
 	if !verifySlackSignature(r, payload, p.pool, p.encKey) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return nil, nil
+	}
+	// The pipeline runs after Slack has been answered, so a modal can only show validation errors if they are
+	// found here.
+	errs := pollClosesAtErrors(payload)
+	if errs == nil {
+		errs = broadcastScheduleErrors(payload)
+	}
+	if errs != nil {
+		modalErrors(w, errs)
 		return nil, nil
 	}
 	w.WriteHeader(http.StatusOK)

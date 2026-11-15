@@ -30,6 +30,10 @@ func (p *SlackPlugin) Init(pctx plugin.PluginContext) error {
 
 	Init(pool, encKey)
 	StartRetryDrainer(pool)
+	go ResumeInterruptedBroadcasts(context.Background(), pool)
+	go RunBroadcastScheduler(context.Background(), pool)
+	go ResumeInterruptedPolls(context.Background(), pool)
+	go RunPollScheduler(context.Background(), pool)
 
 	// Building the client for the stored token registers the workspace IDs (see getClient).
 	go getClient(context.Background())
@@ -71,6 +75,7 @@ func (p *SlackPlugin) Init(pctx plugin.PluginContext) error {
 	// Register API routes.
 	pctx.RegisterAuthRoute("GET", "/api/slack/channels", HandleListSlackChannels())
 	pctx.RegisterAuthRoute("GET", "/api/slack/emojis", HandleListSlackEmojis())
+	pctx.RegisterAuthRoute("GET", "/api/slack/emojis/standard", HandleStandardEmojis())
 	pctx.RegisterAuthRoute("POST", "/api/integrations/slack/manifest", handleManifest(pool, encKey))
 
 	// Admin UI: Slack retry queue (view, manual retry, delete).

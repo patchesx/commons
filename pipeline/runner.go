@@ -98,7 +98,7 @@ func executeRun(ctx context.Context, pool *pgxpool.Pool, encKey []byte,
 		if filterFailed {
 			filterFailActions, _ := store.ListPipelineActions(jobCtx, pool, source.ID, "filter_fail")
 			runFailureActions(jobCtx, pool, jobID, filterFailActions, run.DataMap)
-			store.CompletePipelineRun(jobCtx, pool, run.ID)
+			logRunErr(run.ID, "complete run", store.CompletePipelineRun(jobCtx, pool, run.ID))
 			if jobID != "" {
 				store.CompleteJob(jobCtx, pool, jobID)
 			}
@@ -110,7 +110,7 @@ func executeRun(ctx context.Context, pool *pgxpool.Pool, encKey []byte,
 	successActions, err := store.ListPipelineActions(jobCtx, pool, source.ID, "success")
 	if err != nil {
 		log.Printf("pipeline: run=%s load success actions: %v", run.ID, err)
-		store.FailPipelineRun(jobCtx, pool, run.ID, "failed to load actions")
+		logRunErr(run.ID, "fail run", store.FailPipelineRun(jobCtx, pool, run.ID, "failed to load actions"))
 		if jobID != "" {
 			store.FailJob(jobCtx, pool, jobID, "failed to load actions")
 		}
@@ -135,7 +135,7 @@ func executeRun(ctx context.Context, pool *pgxpool.Pool, encKey []byte,
 		}
 
 		// Persist position + data map before executing (for crash recovery).
-		store.UpdatePipelineRunPosition(jobCtx, pool, run.ID, i, run.DataMap)
+		logRunErr(run.ID, "save position", store.UpdatePipelineRunPosition(jobCtx, pool, run.ID, i, run.DataMap))
 
 		// Create step record.
 		step := &store.PipelineRunStep{
@@ -175,7 +175,7 @@ func executeRun(ctx context.Context, pool *pgxpool.Pool, encKey []byte,
 			// Check if this is a pause signal (delay action).
 			var pause plugin.PauseSignal
 			if errors.As(err, &pause) {
-				store.PausePipelineRun(jobCtx, pool, run.ID, pause.ResumeAt, run.DataMap, i+1)
+				logRunErr(run.ID, "pause run", store.PausePipelineRun(jobCtx, pool, run.ID, pause.ResumeAt, run.DataMap, i+1))
 				log.Printf("pipeline: run=%s paused until %s (action=%s)", run.ID, pause.ResumeAt, action.ID)
 				return // resume scheduler will pick it up
 			}
@@ -190,9 +190,9 @@ func executeRun(ctx context.Context, pool *pgxpool.Pool, encKey []byte,
 
 			// Dead-letter if retries were exhausted; otherwise just fail.
 			if action.RetryConfig != nil && action.RetryConfig.MaxAttempts > 1 {
-				store.DeadLetterPipelineRun(jobCtx, pool, run.ID, err.Error())
+				logRunErr(run.ID, "dead-letter run", store.DeadLetterPipelineRun(jobCtx, pool, run.ID, err.Error()))
 			} else {
-				store.FailPipelineRun(jobCtx, pool, run.ID, err.Error())
+				logRunErr(run.ID, "fail run", store.FailPipelineRun(jobCtx, pool, run.ID, err.Error()))
 			}
 			if jobID != "" {
 				store.FailJob(jobCtx, pool, jobID, err.Error())
@@ -204,7 +204,7 @@ func executeRun(ctx context.Context, pool *pgxpool.Pool, encKey []byte,
 		for k, v := range output {
 			run.DataMap[k] = v
 		}
-		store.UpdatePipelineRunPosition(jobCtx, pool, run.ID, i+1, run.DataMap)
+		logRunErr(run.ID, "save position", store.UpdatePipelineRunPosition(jobCtx, pool, run.ID, i+1, run.DataMap))
 
 		// Record step output.
 		store.CompletePipelineRunStep(jobCtx, pool, step.ID, output)
@@ -212,7 +212,7 @@ func executeRun(ctx context.Context, pool *pgxpool.Pool, encKey []byte,
 	}
 
 	// All actions complete.
-	store.CompletePipelineRun(jobCtx, pool, run.ID)
+	logRunErr(run.ID, "complete run", store.CompletePipelineRun(jobCtx, pool, run.ID))
 	if jobID != "" {
 		store.CompleteJob(jobCtx, pool, jobID)
 	}
@@ -266,4 +266,12 @@ func cloneData(src map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+// logRunErr reports a failed pipeline_runs update. These are best-effort writes, but a run that cannot be
+// marked complete is resumed on every startup, so a failure must not be silent.
+func logRunErr(runID, what string, err error) {
+	if err != nil {
+		log.Printf("pipeline: run=%s %s: %v", runID, what, err)
+	}
 }
