@@ -29,5 +29,7 @@ const (
 	InventoryView           = "inventory.view"
 	InventoryManage         = "inventory.manage"
 	InventoryAdmin          = "inventory.admin"
+	BroadcastSend           = "broadcast.send"
+	PollCreate              = "poll.create"
 	AdminAccess             = "admin.access"
 )

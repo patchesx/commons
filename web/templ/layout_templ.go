@@ -33,6 +33,8 @@ func adminNavGroups() []SidebarGroup {
 				{"/admin/meetings", "Meetings", ""},
 				{"/admin/work-items", "Work Items", "/admin/fragments/open-work-items-count"},
 				{"/admin/audit", "Audit Log", ""},
+				{"/admin/broadcasts", "Broadcasts", ""},
+				{"/admin/polls", "Polls", ""},
 			},
 		},
 		{
@@ -120,7 +122,7 @@ func adminSidebarHeader() templ.Component {
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(appearanceOrgName(web.AppearanceFromContext(ctx)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 83, Col: 54}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 85, Col: 54}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 		if templ_7745c5c3_Err != nil {
@@ -191,7 +193,7 @@ func Layout(title string, currentPath string) templ.Component {
 		var templ_7745c5c3_Var5 string
 		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 110, Col: 17}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 112, Col: 17}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 		if templ_7745c5c3_Err != nil {
@@ -204,7 +206,7 @@ func Layout(title string, currentPath string) templ.Component {
 		var templ_7745c5c3_Var6 string
 		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(appearanceOrgName(web.AppearanceFromContext(ctx)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 110, Col: 75}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 112, Col: 75}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 		if templ_7745c5c3_Err != nil {
@@ -217,7 +219,7 @@ func Layout(title string, currentPath string) templ.Component {
 		var templ_7745c5c3_Var7 templ.SafeURL
 		templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(AssetURL("bulma.min.css")))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 111, Col: 69}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 113, Col: 69}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 		if templ_7745c5c3_Err != nil {
@@ -230,7 +232,7 @@ func Layout(title string, currentPath string) templ.Component {
 		var templ_7745c5c3_Var8 templ.SafeURL
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(AssetURL("app.css")))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 112, Col: 63}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 114, Col: 63}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 		if templ_7745c5c3_Err != nil {
@@ -243,7 +245,7 @@ func Layout(title string, currentPath string) templ.Component {
 		var templ_7745c5c3_Var9 templ.SafeURL
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(AssetURL("phosphor-icons.css")))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 113, Col: 74}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 115, Col: 74}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
@@ -256,7 +258,7 @@ func Layout(title string, currentPath string) templ.Component {
 		var templ_7745c5c3_Var10 templ.SafeURL
 		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(AssetURL("phosphor-duotone-icons.css")))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 114, Col: 82}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 116, Col: 82}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 		if templ_7745c5c3_Err != nil {
@@ -274,7 +276,7 @@ func Layout(title string, currentPath string) templ.Component {
 			var templ_7745c5c3_Var11 templ.SafeURL
 			templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinURLErrs(appearance.FaviconURL)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 116, Col: 49}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 118, Col: 49}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 			if templ_7745c5c3_Err != nil {
@@ -285,14 +287,14 @@ func Layout(title string, currentPath string) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "<!-- Set data-theme before body renders to avoid flash --><script>\n\t\t\t\t(function(){\n\t\t\t\t\tvar mq = window.matchMedia('(prefers-color-scheme: dark)');\n\t\t\t\t\tfunction apply(dark) {\n\t\t\t\t\t\tdocument.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');\n\t\t\t\t\t}\n\t\t\t\t\tapply(mq.matches);\n\t\t\t\t\tmq.addEventListener('change', function(e){ apply(e.matches); });\n\t\t\t\t})();\n\n\t\t\t\tfunction slackComposer(opts) {\n\t\t\t\t\treturn {\n\t\t\t\t\t\ttab: 'edit',\n\t\t\t\t\t\tmessage: opts.message || '',\n\t\t\t\t\t\tusers: opts.users || {},\n\t\t\t\t\t\tchannels: opts.channels || {},\n\t\t\t\t\t\tactionType: opts.actionType || '',\n\t\t\t\t\t\trecipientSlackId: opts.recipientSlackId || '',\n\n\t\t\t\t\t\temojiModalOpen: false,\n\t\t\t\t\t\temojis: [],\n\t\t\t\t\t\temojisLoaded: false,\n\t\t\t\t\t\temojiSearch: '',\n\n\t\t\t\t\t\tasync init() {\n\t\t\t\t\t\t\ttry {\n\t\t\t\t\t\t\t\tconst r = await fetch('/api/slack/emojis');\n\t\t\t\t\t\t\t\tif (r.ok) this.emojis = await r.json();\n\t\t\t\t\t\t\t} catch (e) {\n\t\t\t\t\t\t\t\t// silent — preview just won't render emojis\n\t\t\t\t\t\t\t} finally {\n\t\t\t\t\t\t\t\tthis.emojisLoaded = true;\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t},\n\n\t\t\t\t\t\tinsertMention(text) {\n\t\t\t\t\t\t\tconst ta = this.$refs.msgTextarea;\n\t\t\t\t\t\t\tconst start = ta.selectionStart;\n\t\t\t\t\t\t\tconst end = ta.selectionEnd;\n\t\t\t\t\t\t\tthis.message = this.message.slice(0, start) + text + this.message.slice(end);\n\t\t\t\t\t\t\tthis.$nextTick(() => {\n\t\t\t\t\t\t\t\tta.selectionStart = ta.selectionEnd = start + text.length;\n\t\t\t\t\t\t\t\tta.focus();\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t},\n\n\t\t\t\t\t\tget filteredEmojis() {\n\t\t\t\t\t\t\tconst q = this.emojiSearch.toLowerCase().trim();\n\t\t\t\t\t\t\tif (!q) return this.emojis;\n\t\t\t\t\t\t\treturn this.emojis.filter(e => e.name.toLowerCase().includes(q));\n\t\t\t\t\t\t},\n\n\t\t\t\t\t\tasync openEmojiModal() {\n\t\t\t\t\t\t\tthis.emojiModalOpen = true;\n\t\t\t\t\t\t\tif (!this.emojisLoaded) {\n\t\t\t\t\t\t\t\ttry {\n\t\t\t\t\t\t\t\t\tconst r = await fetch('/api/slack/emojis');\n\t\t\t\t\t\t\t\t\tif (r.ok) this.emojis = await r.json();\n\t\t\t\t\t\t\t\t} finally {\n\t\t\t\t\t\t\t\t\tthis.emojisLoaded = true;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t},\n\n\t\t\t\t\t\tinsertEmoji(name) {\n\t\t\t\t\t\t\tthis.insertMention(':' + name + ':');\n\t\t\t\t\t\t\tthis.emojiModalOpen = false;\n\t\t\t\t\t\t\tthis.emojiSearch = '';\n\t\t\t\t\t\t},\n\n\t\t\t\t\t\tget previewHtml() {\n\t\t\t\t\t\t\tconst esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\t\t\t\t\t\t\tlet t = esc(this.message);\n\t\t\t\t\t\t\t// Extract emojis into placeholders before markdown processing to\n\t\t\t\t\t\t\t// prevent * _ ~ ` inside emoji names from being mangled.\n\t\t\t\t\t\t\tconst emojiMap = {};\n\t\t\t\t\t\t\tfor (const e of this.emojis) {\n\t\t\t\t\t\t\t\tif (e.url) emojiMap[e.name] = e.url;\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tconst emojiImgs = [];\n\t\t\t\t\t\t\tt = t.replace(/:([a-z0-9_+-]+):/g, (match, name) => {\n\t\t\t\t\t\t\t\tif (emojiMap[name]) {\n\t\t\t\t\t\t\t\t\tconst idx = emojiImgs.length;\n\t\t\t\t\t\t\t\t\temojiImgs.push('<img src=\"' + emojiMap[name] + '\" alt=\":' + name + ':\" style=\"max-width:1.25rem;max-height:1.25rem;vertical-align:middle\">');\n\t\t\t\t\t\t\t\t\treturn '\\x00E' + idx + '\\x00';\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\treturn match;\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\tt = t.replace(/&lt;@\\{\\{user_id\\}\\}&gt;/g,\n\t\t\t\t\t\t\t\t'<span class=\"slack-mention\">@Joining Member</span>');\n\t\t\t\t\t\t\tconst u = this.users;\n\t\t\t\t\t\t\tt = t.replace(/&lt;@([A-Z0-9]+)&gt;/g, (_, id) =>\n\t\t\t\t\t\t\t\t'<span class=\"slack-mention\">@' + esc(u[id] || id) + '</span>');\n\t\t\t\t\t\t\tconst ch = this.channels;\n\t\t\t\t\t\t\tt = t.replace(/&lt;#([A-Z0-9]+)&gt;/g, (_, id) =>\n\t\t\t\t\t\t\t\t'<span class=\"slack-mention\">#' + esc(ch[id] || id) + '</span>');\n\t\t\t\t\t\t\tt = t.replace(/\\*((?:[^*]|\\n)+?)\\*/g, '<strong>$1</strong>');\n\t\t\t\t\t\t\tt = t.replace(/_((?:[^_]|\\n)+?)_/g, '<em>$1</em>');\n\t\t\t\t\t\t\tt = t.replace(/~((?:[^~]|\\n)+?)~/g, '<del>$1</del>');\n\t\t\t\t\t\t\tt = t.replace(/`([^`\\n]+)`/g, '<code class=\"slack-code\">$1</code>');\n\t\t\t\t\t\t\tt = t.replace(/\\n/g, '<br>');\n\t\t\t\t\t\t\t// Restore emoji images after markdown processing.\n\t\t\t\t\t\t\temojiImgs.forEach((img, idx) => {\n\t\t\t\t\t\t\t\tt = t.split('\\x00E' + idx + '\\x00').join(img);\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\treturn t || '<span class=\"has-text-grey-light\" style=\"font-style:italic\">Nothing to preview</span>';\n\t\t\t\t\t\t}\n\t\t\t\t\t};\n\t\t\t\t}\n\t\t\t</script><script defer src=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "<!-- Set data-theme before body renders to avoid flash --><script>\n\t\t\t\t(function(){\n\t\t\t\t\tvar mq = window.matchMedia('(prefers-color-scheme: dark)');\n\t\t\t\t\tfunction apply(dark) {\n\t\t\t\t\t\tdocument.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');\n\t\t\t\t\t}\n\t\t\t\t\tapply(mq.matches);\n\t\t\t\t\tmq.addEventListener('change', function(e){ apply(e.matches); });\n\t\t\t\t})();\n\n\t\t\t\t// Emoji data is shared by every composer on the page and fetched once: the standard set, which is\n\t\t\t\t// static, and the workspace's custom emoji, which can fail (for example without the emoji:read scope).\n\t\t\t\tlet slackEmojiLoad = null;\n\t\t\t\tfunction loadSlackEmoji() {\n\t\t\t\t\tif (slackEmojiLoad) return slackEmojiLoad;\n\t\t\t\t\tconst getJSON = async (url) => {\n\t\t\t\t\t\tconst r = await fetch(url);\n\t\t\t\t\t\tconst body = await r.json().catch(() => null);\n\t\t\t\t\t\tif (!r.ok) throw new Error((body && body.error) || ('HTTP ' + r.status));\n\t\t\t\t\t\treturn body;\n\t\t\t\t\t};\n\t\t\t\t\tslackEmojiLoad = Promise.all([\n\t\t\t\t\t\tgetJSON('/api/slack/emojis/standard').catch(() => []),\n\t\t\t\t\t\tgetJSON('/api/slack/emojis').then(custom => ({ custom: custom || [], error: '' }))\n\t\t\t\t\t\t\t.catch(e => ({ custom: [], error: e.message })),\n\t\t\t\t\t]).then(([standard, c]) => {\n\t\t\t\t\t\tconst byName = {};\n\t\t\t\t\t\tstandard.forEach(x => x.n.forEach(n => { byName[n] = x.e; }));\n\t\t\t\t\t\treturn { standard, byName, custom: c.custom, error: c.error };\n\t\t\t\t\t});\n\t\t\t\t\treturn slackEmojiLoad;\n\t\t\t\t}\n\n\t\t\t\tfunction slackComposer(opts) {\n\t\t\t\t\treturn {\n\t\t\t\t\t\ttab: 'edit',\n\t\t\t\t\t\tmessage: opts.message || '',\n\t\t\t\t\t\tusers: opts.users || {},\n\t\t\t\t\t\tchannels: opts.channels || {},\n\t\t\t\t\t\tactionType: opts.actionType || '',\n\t\t\t\t\t\trecipientSlackId: opts.recipientSlackId || '',\n\n\t\t\t\t\t\temojiModalOpen: false,\n\t\t\t\t\t\temojis: [],\n\t\t\t\t\t\tstandard: [],\n\t\t\t\t\t\temojiByName: {},\n\t\t\t\t\t\temojiError: '',\n\t\t\t\t\t\temojisLoaded: false,\n\t\t\t\t\t\temojiSearch: '',\n\t\t\t\t\t\temojiTab: 'Smileys & Emotion',\n\t\t\t\t\t\temojiTabs: [\n\t\t\t\t\t\t\t{ id: 'custom', label: 'Custom', icon: '' },\n\t\t\t\t\t\t\t{ id: 'Smileys & Emotion', label: 'Smileys & Emotion', icon: '\\u{1F600}' },\n\t\t\t\t\t\t\t{ id: 'People & Body', label: 'People & Body', icon: '\\u{1F44B}' },\n\t\t\t\t\t\t\t{ id: 'Animals & Nature', label: 'Animals & Nature', icon: '\\u{1F43B}' },\n\t\t\t\t\t\t\t{ id: 'Food & Drink', label: 'Food & Drink', icon: '\\u{1F354}' },\n\t\t\t\t\t\t\t{ id: 'Travel & Places', label: 'Travel & Places', icon: '\\u2708\\uFE0F' },\n\t\t\t\t\t\t\t{ id: 'Activities', label: 'Activities', icon: '\\u26BD' },\n\t\t\t\t\t\t\t{ id: 'Objects', label: 'Objects', icon: '\\u{1F4A1}' },\n\t\t\t\t\t\t\t{ id: 'Symbols', label: 'Symbols', icon: '\\u2764\\uFE0F' },\n\t\t\t\t\t\t\t{ id: 'Flags', label: 'Flags', icon: '\\u{1F3C1}' },\n\t\t\t\t\t\t],\n\n\t\t\t\t\t\tasync init() {\n\t\t\t\t\t\t\tconst d = await loadSlackEmoji();\n\t\t\t\t\t\t\tthis.emojis = d.custom;\n\t\t\t\t\t\t\tthis.standard = d.standard;\n\t\t\t\t\t\t\tthis.emojiByName = d.byName;\n\t\t\t\t\t\t\tthis.emojiError = d.error;\n\t\t\t\t\t\t\tthis.emojisLoaded = true;\n\t\t\t\t\t\t},\n\n\t\t\t\t\t\tinsertMention(text) {\n\t\t\t\t\t\t\tconst ta = this.$refs.msgTextarea;\n\t\t\t\t\t\t\tconst start = ta.selectionStart;\n\t\t\t\t\t\t\tconst end = ta.selectionEnd;\n\t\t\t\t\t\t\tthis.message = this.message.slice(0, start) + text + this.message.slice(end);\n\t\t\t\t\t\t\tthis.$nextTick(() => {\n\t\t\t\t\t\t\t\tta.selectionStart = ta.selectionEnd = start + text.length;\n\t\t\t\t\t\t\t\tta.focus();\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t},\n\n\t\t\t\t\t\t// What the picker shows: the chosen tab, or every match across custom and standard emoji while searching.\n\t\t\t\t\t\tget filteredEmojis() {\n\t\t\t\t\t\t\tconst q = this.emojiSearch.toLowerCase().trim();\n\t\t\t\t\t\t\tconst custom = this.emojis.map(e => ({\n\t\t\t\t\t\t\t\tkey: 'c:' + e.name, name: e.name, url: e.url || '',\n\t\t\t\t\t\t\t\tchar: !e.url && e.alias ? (this.emojiByName[e.alias] || '') : '',\n\t\t\t\t\t\t\t}));\n\t\t\t\t\t\t\tconst std = x => ({ key: 's:' + x.n[0], name: x.n[0], url: '', char: x.e });\n\t\t\t\t\t\t\tif (!q) {\n\t\t\t\t\t\t\t\tif (this.emojiTab === 'custom') return custom;\n\t\t\t\t\t\t\t\treturn this.standard.filter(x => x.c === this.emojiTab).map(std);\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tconst hit = s => s.toLowerCase().includes(q);\n\t\t\t\t\t\t\treturn custom.filter(e => hit(e.name))\n\t\t\t\t\t\t\t\t.concat(this.standard.filter(x => x.n.some(hit) || x.t.some(hit)).map(std))\n\t\t\t\t\t\t\t\t.slice(0, 300);\n\t\t\t\t\t\t},\n\n\t\t\t\t\t\topenEmojiModal() {\n\t\t\t\t\t\t\tthis.emojiModalOpen = true;\n\t\t\t\t\t\t},\n\n\t\t\t\t\t\tinsertEmoji(name) {\n\t\t\t\t\t\t\tthis.insertMention(':' + name + ':');\n\t\t\t\t\t\t\tthis.emojiModalOpen = false;\n\t\t\t\t\t\t\tthis.emojiSearch = '';\n\t\t\t\t\t\t},\n\n\t\t\t\t\t\tget previewHtml() {\n\t\t\t\t\t\t\tconst esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\t\t\t\t\t\t\tlet t = esc(this.message);\n\t\t\t\t\t\t\t// Extract emojis into placeholders before markdown processing to\n\t\t\t\t\t\t\t// prevent * _ ~ ` inside emoji names from being mangled.\n\t\t\t\t\t\t\tconst emojiMap = {};\n\t\t\t\t\t\t\tfor (const e of this.emojis) {\n\t\t\t\t\t\t\t\tif (e.url) emojiMap[e.name] = e.url;\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tconst customChars = {};\n\t\t\t\t\t\t\tfor (const e of this.emojis) {\n\t\t\t\t\t\t\t\tif (!e.url && e.alias && this.emojiByName[e.alias]) customChars[e.name] = this.emojiByName[e.alias];\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tconst emojiImgs = [];\n\t\t\t\t\t\t\tt = t.replace(/:([a-z0-9_+-]+):/g, (match, name) => {\n\t\t\t\t\t\t\t\tlet html = null;\n\t\t\t\t\t\t\t\tif (emojiMap[name]) {\n\t\t\t\t\t\t\t\t\thtml = '<img src=\"' + emojiMap[name] + '\" alt=\":' + name + ':\" style=\"max-width:1.25rem;max-height:1.25rem;vertical-align:middle\">';\n\t\t\t\t\t\t\t\t} else if (customChars[name] || this.emojiByName[name]) {\n\t\t\t\t\t\t\t\t\thtml = customChars[name] || this.emojiByName[name];\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\tif (html === null) return match;\n\t\t\t\t\t\t\t\temojiImgs.push(html);\n\t\t\t\t\t\t\t\treturn '\\x00E' + (emojiImgs.length - 1) + '\\x00';\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\tt = t.replace(/&lt;@\\{\\{user_id\\}\\}&gt;/g,\n\t\t\t\t\t\t\t\t'<span class=\"slack-mention\">@Joining Member</span>');\n\t\t\t\t\t\t\tconst u = this.users;\n\t\t\t\t\t\t\tt = t.replace(/&lt;@([A-Z0-9]+)&gt;/g, (_, id) =>\n\t\t\t\t\t\t\t\t'<span class=\"slack-mention\">@' + esc(u[id] || id) + '</span>');\n\t\t\t\t\t\t\tconst ch = this.channels;\n\t\t\t\t\t\t\tt = t.replace(/&lt;#([A-Z0-9]+)&gt;/g, (_, id) =>\n\t\t\t\t\t\t\t\t'<span class=\"slack-mention\">#' + esc(ch[id] || id) + '</span>');\n\t\t\t\t\t\t\tt = t.replace(/\\*((?:[^*]|\\n)+?)\\*/g, '<strong>$1</strong>');\n\t\t\t\t\t\t\tt = t.replace(/_((?:[^_]|\\n)+?)_/g, '<em>$1</em>');\n\t\t\t\t\t\t\tt = t.replace(/~((?:[^~]|\\n)+?)~/g, '<del>$1</del>');\n\t\t\t\t\t\t\tt = t.replace(/`([^`\\n]+)`/g, '<code class=\"slack-code\">$1</code>');\n\t\t\t\t\t\t\tt = t.replace(/\\n/g, '<br>');\n\t\t\t\t\t\t\t// Restore emoji images after markdown processing.\n\t\t\t\t\t\t\temojiImgs.forEach((img, idx) => {\n\t\t\t\t\t\t\t\tt = t.split('\\x00E' + idx + '\\x00').join(img);\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\treturn t || '<span class=\"has-text-grey-light\" style=\"font-style:italic\">Nothing to preview</span>';\n\t\t\t\t\t\t}\n\t\t\t\t\t};\n\t\t\t\t}\n\t\t\t</script><script defer src=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var12 string
 		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(templ.URL(AssetURL("alpine.min.js")))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 229, Col: 59}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/templ/layout.templ`, Line: 279, Col: 59}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 		if templ_7745c5c3_Err != nil {

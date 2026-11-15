@@ -25,6 +25,8 @@ func adminNavGroups() []SidebarGroup {
 				{"/admin/meetings", "Meetings", ""},
 				{"/admin/work-items", "Work Items", "/admin/fragments/open-work-items-count"},
 				{"/admin/audit", "Audit Log", ""},
+				{"/admin/broadcasts", "Broadcasts", ""},
+				{"/admin/polls", "Polls", ""},
 			},
 		},
 		{
@@ -126,6 +128,29 @@ templ Layout(title string, currentPath string) {
 					mq.addEventListener('change', function(e){ apply(e.matches); });
 				})();
 
+				// Emoji data is shared by every composer on the page and fetched once: the standard set, which is
+				// static, and the workspace's custom emoji, which can fail (for example without the emoji:read scope).
+				let slackEmojiLoad = null;
+				function loadSlackEmoji() {
+					if (slackEmojiLoad) return slackEmojiLoad;
+					const getJSON = async (url) => {
+						const r = await fetch(url);
+						const body = await r.json().catch(() => null);
+						if (!r.ok) throw new Error((body && body.error) || ('HTTP ' + r.status));
+						return body;
+					};
+					slackEmojiLoad = Promise.all([
+						getJSON('/api/slack/emojis/standard').catch(() => []),
+						getJSON('/api/slack/emojis').then(custom => ({ custom: custom || [], error: '' }))
+							.catch(e => ({ custom: [], error: e.message })),
+					]).then(([standard, c]) => {
+						const byName = {};
+						standard.forEach(x => x.n.forEach(n => { byName[n] = x.e; }));
+						return { standard, byName, custom: c.custom, error: c.error };
+					});
+					return slackEmojiLoad;
+				}
+
 				function slackComposer(opts) {
 					return {
 						tab: 'edit',
@@ -137,18 +162,32 @@ templ Layout(title string, currentPath string) {
 
 						emojiModalOpen: false,
 						emojis: [],
+						standard: [],
+						emojiByName: {},
+						emojiError: '',
 						emojisLoaded: false,
 						emojiSearch: '',
+						emojiTab: 'Smileys & Emotion',
+						emojiTabs: [
+							{ id: 'custom', label: 'Custom', icon: '' },
+							{ id: 'Smileys & Emotion', label: 'Smileys & Emotion', icon: '\u{1F600}' },
+							{ id: 'People & Body', label: 'People & Body', icon: '\u{1F44B}' },
+							{ id: 'Animals & Nature', label: 'Animals & Nature', icon: '\u{1F43B}' },
+							{ id: 'Food & Drink', label: 'Food & Drink', icon: '\u{1F354}' },
+							{ id: 'Travel & Places', label: 'Travel & Places', icon: '\u2708\uFE0F' },
+							{ id: 'Activities', label: 'Activities', icon: '\u26BD' },
+							{ id: 'Objects', label: 'Objects', icon: '\u{1F4A1}' },
+							{ id: 'Symbols', label: 'Symbols', icon: '\u2764\uFE0F' },
+							{ id: 'Flags', label: 'Flags', icon: '\u{1F3C1}' },
+						],
 
 						async init() {
-							try {
-								const r = await fetch('/api/slack/emojis');
-								if (r.ok) this.emojis = await r.json();
-							} catch (e) {
-								// silent — preview just won't render emojis
-							} finally {
-								this.emojisLoaded = true;
-							}
+							const d = await loadSlackEmoji();
+							this.emojis = d.custom;
+							this.standard = d.standard;
+							this.emojiByName = d.byName;
+							this.emojiError = d.error;
+							this.emojisLoaded = true;
 						},
 
 						insertMention(text) {
@@ -162,22 +201,26 @@ templ Layout(title string, currentPath string) {
 							});
 						},
 
+						// What the picker shows: the chosen tab, or every match across custom and standard emoji while searching.
 						get filteredEmojis() {
 							const q = this.emojiSearch.toLowerCase().trim();
-							if (!q) return this.emojis;
-							return this.emojis.filter(e => e.name.toLowerCase().includes(q));
+							const custom = this.emojis.map(e => ({
+								key: 'c:' + e.name, name: e.name, url: e.url || '',
+								char: !e.url && e.alias ? (this.emojiByName[e.alias] || '') : '',
+							}));
+							const std = x => ({ key: 's:' + x.n[0], name: x.n[0], url: '', char: x.e });
+							if (!q) {
+								if (this.emojiTab === 'custom') return custom;
+								return this.standard.filter(x => x.c === this.emojiTab).map(std);
+							}
+							const hit = s => s.toLowerCase().includes(q);
+							return custom.filter(e => hit(e.name))
+								.concat(this.standard.filter(x => x.n.some(hit) || x.t.some(hit)).map(std))
+								.slice(0, 300);
 						},
 
-						async openEmojiModal() {
+						openEmojiModal() {
 							this.emojiModalOpen = true;
-							if (!this.emojisLoaded) {
-								try {
-									const r = await fetch('/api/slack/emojis');
-									if (r.ok) this.emojis = await r.json();
-								} finally {
-									this.emojisLoaded = true;
-								}
-							}
 						},
 
 						insertEmoji(name) {
@@ -195,14 +238,21 @@ templ Layout(title string, currentPath string) {
 							for (const e of this.emojis) {
 								if (e.url) emojiMap[e.name] = e.url;
 							}
+							const customChars = {};
+							for (const e of this.emojis) {
+								if (!e.url && e.alias && this.emojiByName[e.alias]) customChars[e.name] = this.emojiByName[e.alias];
+							}
 							const emojiImgs = [];
 							t = t.replace(/:([a-z0-9_+-]+):/g, (match, name) => {
+								let html = null;
 								if (emojiMap[name]) {
-									const idx = emojiImgs.length;
-									emojiImgs.push('<img src="' + emojiMap[name] + '" alt=":' + name + ':" style="max-width:1.25rem;max-height:1.25rem;vertical-align:middle">');
-									return '\x00E' + idx + '\x00';
+									html = '<img src="' + emojiMap[name] + '" alt=":' + name + ':" style="max-width:1.25rem;max-height:1.25rem;vertical-align:middle">';
+								} else if (customChars[name] || this.emojiByName[name]) {
+									html = customChars[name] || this.emojiByName[name];
 								}
-								return match;
+								if (html === null) return match;
+								emojiImgs.push(html);
+								return '\x00E' + (emojiImgs.length - 1) + '\x00';
 							});
 							t = t.replace(/&lt;@\{\{user_id\}\}&gt;/g,
 								'<span class="slack-mention">@Joining Member</span>');

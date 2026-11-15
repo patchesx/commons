@@ -289,6 +289,19 @@ func main() {
 	mux.Handle("GET /inventory/{code}", admin.InventoryClaimPage())
 	mux.Handle("POST /inventory/{code}", admin.InventoryClaimSubmit())
 
+	// Broadcasts — one Slack DM to every active member. Each handler checks broadcast.send.
+	mux.Handle("GET /admin/broadcasts", webAuth(admin.BroadcastsPage()))
+	mux.Handle("GET /admin/broadcasts/new", webAuth(admin.BroadcastNewPage()))
+	mux.Handle("POST /admin/broadcasts", webAuth(admin.BroadcastSend()))
+	mux.Handle("GET /admin/broadcasts/{id}", webAuth(admin.BroadcastDetailPage()))
+	mux.Handle("POST /admin/broadcasts/{id}/retry", webAuth(admin.BroadcastRetry()))
+	mux.Handle("POST /admin/broadcasts/{id}/cancel", webAuth(admin.BroadcastCancel()))
+	mux.Handle("GET /admin/fragments/broadcasts/{id}", webAuth(admin.BroadcastDetailFragment()))
+
+	// Polls — history and results of Slack emoji straw polls. Each handler checks poll.create.
+	mux.Handle("GET /admin/polls", webAuth(admin.PollsPage()))
+	mux.Handle("GET /admin/polls/{id}", webAuth(admin.PollDetailPage()))
+
 	// Inventory — items, detail, custom fields. Each handler checks its own inventory.* permission.
 	mux.Handle("GET /admin/inventory", webAuth(admin.InventoryPage()))
 	mux.Handle("GET /admin/inventory/fields", webAuth(admin.InventoryFieldsPage()))

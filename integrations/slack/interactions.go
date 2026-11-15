@@ -948,6 +948,27 @@ func handleBlockAction(ctx context.Context, w http.ResponseWriter, pool *pgxpool
 		go handleDeclineRequest(context.Background(), pool, encKey, client, payload, action.Value)
 		w.WriteHeader(http.StatusOK)
 
+	case ActionBroadcastNew:
+		go startBroadcastDraft(context.Background(), pool, client, payload.User.ID, payload.TriggerID)
+		w.WriteHeader(http.StatusOK)
+
+	case ActionBroadcastSend, ActionBroadcastSchedule, ActionBroadcastDiscard:
+		go handleBroadcastDraftAction(context.Background(), pool, client, payload, action.ActionID, action.Value)
+		w.WriteHeader(http.StatusOK)
+
+	case ActionPollNew:
+		go startPollDraft(context.Background(), pool, client, payload.User.ID, payload.TriggerID)
+		w.WriteHeader(http.StatusOK)
+
+	case ActionPollDraftCancel, ActionPollOptionsDone, ActionPollOptionsReset, ActionPollAudienceEveryone,
+		ActionPollAudienceChannel, ActionPollPickTime, ActionPollStart:
+		go handlePollDraftAction(context.Background(), pool, client, payload, *action)
+		w.WriteHeader(http.StatusOK)
+
+	case ActionPollClose, ActionPollCancel:
+		go handlePollControl(context.Background(), pool, client, payload, action.Value, action.ActionID == ActionPollCancel)
+		w.WriteHeader(http.StatusOK)
+
 	default:
 		// Unknown action (e.g. URL button clicks from resource links) — acknowledge silently.
 		w.WriteHeader(http.StatusOK)
@@ -991,6 +1012,12 @@ func handleViewSubmission(ctx context.Context, w http.ResponseWriter, pool *pgxp
 
 		go NotifyChannelAccessRequest(context.Background(), pool, client, req)
 		w.WriteHeader(http.StatusOK)
+
+	case ModalIDPollClosesAt:
+		handlePollClosesAtSubmission(ctx, w, pool, client, payload)
+
+	case ModalIDBroadcastSchedule:
+		handleBroadcastScheduleSubmission(ctx, w, pool, client, payload)
 
 	case ModalIDEditMeeting:
 		handleEditMeetingSubmission(ctx, w, pool, encKey, sched, client, payload)

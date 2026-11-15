@@ -1,0 +1,203 @@
+package admintempl
+
+import (
+	"fmt"
+	"strconv"
+	"time"
+)
+
+// PollView backs a row on the history page and the detail page.
+type PollView struct {
+	ID          string
+	Question    string
+	CreatorName string
+	Audience    string // "channel" or "everyone"
+	ChannelID   string
+	Status      string // posting, open, closed, cancelled
+	CreatedAt   time.Time
+	ClosesAt    time.Time
+	ClosedAt    *time.Time
+	Voters      int
+	Messages    int
+	Posted      int
+	Failed      int
+	MultiVoters int // members who voted for more than one option
+	Options     []PollOptionView
+}
+
+// PollOptionView is one answer and its result.
+type PollOptionView struct {
+	Emoji   string // character for a standard emoji, or :name: for a custom one
+	Label   string
+	Votes   int
+	Percent int // of all votes cast, rounded
+}
+
+func pollTime(t time.Time) string {
+	return t.Format("Jan 2, 2006 3:04 PM MST")
+}
+
+func pollAudienceText(p PollView) string {
+	if p.Audience == "everyone" {
+		return fmt.Sprintf("Every active member (%d of %d reached)", p.Posted, p.Messages)
+	}
+	return "A channel (" + p.ChannelID + ")"
+}
+
+func pollTallied(p PollView) bool {
+	return p.Status == "closed"
+}
+
+// pollEnded is when a poll closed, or when it is set to close.
+func pollEnded(p PollView) string {
+	switch {
+	case p.Status == "cancelled" && p.ClosedAt != nil:
+		return "Cancelled " + pollTime(*p.ClosedAt)
+	case p.ClosedAt != nil:
+		return "Closed " + pollTime(*p.ClosedAt)
+	default:
+		return "Closes " + pollTime(p.ClosesAt)
+	}
+}
+
+templ PollStatusBadge(status string) {
+	switch status {
+		case "closed":
+			@StatusBadge("closed", "green")
+		case "cancelled":
+			@StatusBadge("cancelled", "gray")
+		case "posting":
+			@StatusBadge("sending", "yellow")
+		default:
+			@StatusBadge("open", "blue")
+	}
+}
+
+templ PollsPage(polls []PollView) {
+	@Layout("Polls", "/admin/polls") {
+		<div>
+			<h1 class="title is-4 mb-3">Polls</h1>
+			@PageHelp() {
+				Emoji straw polls created from the Slack App Home. Members vote by reacting, and the reactions are tallied when the poll closes.
+			}
+			<div class="card">
+				<div class="table-container">
+					<table class="table is-fullwidth is-hoverable is-narrow mb-0">
+						<thead>
+							<tr>
+								<th>Created</th>
+								<th>By</th>
+								<th>Question</th>
+								<th>Closes</th>
+								<th>Status</th>
+								<th>Voters</th>
+								<th></th>
+							</tr>
+						</thead>
+						if len(polls) == 0 {
+							<tbody>
+								<tr>
+									<td colspan="7" class="has-text-centered py-6">
+										@EmptyState("No polls yet.")
+									</td>
+								</tr>
+							</tbody>
+						}
+						for _, p := range polls {
+							<tbody>
+								<tr>
+									<td class="is-size-7" style="white-space: nowrap">{ pollTime(p.CreatedAt) }</td>
+									<td class="is-size-7" style="white-space: nowrap">{ p.CreatorName }</td>
+									<td class="is-size-7" style="max-width: 24rem">{ broadcastPreview(p.Question) }</td>
+									<td class="is-size-7" style="white-space: nowrap">{ pollTime(p.ClosesAt) }</td>
+									<td>
+										@PollStatusBadge(p.Status)
+										if p.Failed > 0 {
+											@StatusBadge(strconv.Itoa(p.Failed)+" not sent", "red")
+										}
+									</td>
+									<td class="is-size-7">
+										if pollTallied(p) {
+											{ strconv.Itoa(p.Voters) }
+										} else {
+											&mdash;
+										}
+									</td>
+									<td class="has-text-right"><a href={ templ.SafeURL("/admin/polls/" + p.ID) }>View</a></td>
+								</tr>
+							</tbody>
+						}
+					</table>
+				</div>
+			</div>
+		</div>
+	}
+}
+
+templ PollDetailPage(p PollView) {
+	@Layout("Poll", "/admin/polls") {
+		<div>
+			<p class="mb-2"><a href="/admin/polls">&larr; Polls</a></p>
+			<h1 class="title is-4 mb-3">{ p.Question }</h1>
+			<div class="card mb-4">
+				<div class="card-content">
+					<div class="tags mb-2">
+						@PollStatusBadge(p.Status)
+						if pollTallied(p) {
+							<span class="tag is-light">{ strconv.Itoa(p.Voters) } voted</span>
+						}
+						if p.Failed > 0 {
+							<span class="tag is-danger is-light">{ strconv.Itoa(p.Failed) } not sent</span>
+						}
+					</div>
+					<p class="is-size-7 has-text-grey">
+						Created by { p.CreatorName } on { pollTime(p.CreatedAt) }. { pollEnded(p) }.
+					</p>
+					<p class="is-size-7 has-text-grey">{ pollAudienceText(p) }</p>
+				</div>
+			</div>
+			<div class="card">
+				<div class="card-content">
+					<h2 class="title is-6 mb-3">Results</h2>
+					if pollTallied(p) {
+						for _, o := range p.Options {
+							<div class="mb-3">
+								<div class="is-flex is-justify-content-space-between">
+									<span>{ o.Emoji } { o.Label }</span>
+									<span class="has-text-weight-semibold">{ strconv.Itoa(o.Votes) } ({ strconv.Itoa(o.Percent) }%)</span>
+								</div>
+								<progress class="progress is-link is-small mt-1" value={ strconv.Itoa(o.Votes) } max={ strconv.Itoa(pollMaxVotes(p)) }></progress>
+							</div>
+						}
+						if p.MultiVoters > 0 {
+							<div class="notification is-warning is-light is-size-7 mb-0">
+								{ strconv.Itoa(p.MultiVoters) } members picked more than one option and count toward each, which can skew the results.
+							</div>
+						}
+					} else {
+						<ul>
+							for _, o := range p.Options {
+								<li>{ o.Emoji } { o.Label }</li>
+							}
+						</ul>
+						<p class="is-size-7 has-text-grey mt-3">
+							if p.Status == "cancelled" {
+								This poll was cancelled, so no results were tallied.
+							} else {
+								Results appear here once the poll closes.
+							}
+						</p>
+					}
+				</div>
+			</div>
+		</div>
+	}
+}
+
+func pollMaxVotes(p PollView) int {
+	total := 0
+	for _, o := range p.Options {
+		total += o.Votes
+	}
+	return max(total, 1)
+}

@@ -63,7 +63,7 @@ func resumeDueRuns(ctx context.Context, pool *pgxpool.Pool, encKey []byte, reg C
 			source, err := store.GetTriggerSourceByID(bgCtx, pool, run.TriggerID)
 			if err != nil {
 				log.Printf("pipeline/resume: run=%s load source: %v", run.ID, err)
-				store.FailPipelineRun(bgCtx, pool, run.ID, "trigger source not found")
+				logRunErr(run.ID, "fail run", store.FailPipelineRun(bgCtx, pool, run.ID, "trigger source not found"))
 				return
 			}
 			log.Printf("pipeline/resume: run=%s resuming from step %d", run.ID, run.CurrentStep)
@@ -110,7 +110,7 @@ func ResumeInterruptedRuns(ctx context.Context, pool *pgxpool.Pool, encKey []byt
 			source, err := store.GetTriggerSourceByID(bgCtx, pool, run.TriggerID)
 			if err != nil {
 				log.Printf("pipeline/resume: run=%s load source: %v", run.ID, err)
-				store.FailPipelineRun(bgCtx, pool, run.ID, "trigger source not found")
+				logRunErr(run.ID, "fail run", store.FailPipelineRun(bgCtx, pool, run.ID, "trigger source not found"))
 				return
 			}
 			log.Printf("pipeline/resume: run=%s resuming from step %d (was %s)", run.ID, run.CurrentStep, run.Status)

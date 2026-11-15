@@ -185,12 +185,18 @@ func throttleFor(key string) *sendThrottle {
 // different channels proceed independently. Returns ctx.Err() if the context is
 // cancelled while waiting.
 func throttleSlackSend(ctx context.Context, key string) error {
+	return throttleSlackSendEvery(ctx, key, sendInterval)
+}
+
+// throttleSlackSendEvery is throttleSlackSend with its own spacing, for conversations where waiting the usual
+// sendInterval between replies would feel broken.
+func throttleSlackSendEvery(ctx context.Context, key string, interval time.Duration) error {
 	t := throttleFor(key)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := time.Now()
 	// Earliest we may send: sendInterval after the last send.
-	waitUntil := t.lastTime.Add(sendInterval)
+	waitUntil := t.lastTime.Add(interval)
 	// Honor any active rate-limit backoff (e.g. from a 429 Retry-After).
 	if t.rateLimitedUntil.After(waitUntil) {
 		waitUntil = t.rateLimitedUntil
@@ -310,15 +316,18 @@ func ListChannels(ctx context.Context) ([]SlackChannel, error) {
 	return out, nil
 }
 
-// SlackEmoji is a minimal emoji descriptor returned by ListEmojis.
+// SlackEmoji is a minimal emoji descriptor returned by ListEmojis. An alias of another custom emoji carries
+// that emoji's image URL. An alias of a standard emoji has no URL, and Alias names the standard emoji.
 type SlackEmoji struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
+	Name  string `json:"name"`
+	URL   string `json:"url"`
+	Alias string `json:"alias,omitempty"`
 }
 
+// maxEmojiAliasDepth bounds alias chains, which Slack does not allow to loop but a bad payload could.
+const maxEmojiAliasDepth = 5
+
 // ListEmojis returns all custom emojis in the workspace via emoji.list.
-// Aliases (whose value is "alias:target") have an empty URL since they have no
-// image of their own.
 func ListEmojis(ctx context.Context) ([]SlackEmoji, error) {
 	client := getClient(ctx)
 	if client == nil {
@@ -328,17 +337,32 @@ func ListEmojis(ctx context.Context) ([]SlackEmoji, error) {
 	if err != nil {
 		return nil, err
 	}
+	return buildEmojiList(emojiMap), nil
+}
+
+// buildEmojiList turns emoji.list's name -> URL map (where an alias is "alias:target") into a sorted list,
+// following aliases to the image they ultimately point at.
+func buildEmojiList(emojiMap map[string]string) []SlackEmoji {
 	out := make([]SlackEmoji, 0, len(emojiMap))
-	for name, url := range emojiMap {
-		if strings.HasPrefix(url, "alias:") {
-			url = ""
+	for name, value := range emojiMap {
+		e := SlackEmoji{Name: name}
+		for depth := 0; strings.HasPrefix(value, "alias:"); depth++ {
+			target := strings.TrimPrefix(value, "alias:")
+			next, custom := emojiMap[target]
+			if !custom || depth >= maxEmojiAliasDepth {
+				e.Alias = target
+				value = ""
+				break
+			}
+			value = next
 		}
-		out = append(out, SlackEmoji{Name: name, URL: url})
+		e.URL = value
+		out = append(out, e)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Name < out[j].Name
 	})
-	return out, nil
+	return out
 }
 
 // PostDirectMessage sends a plain text DM to a Slack user by ID.
@@ -381,7 +405,12 @@ func PostChannelMessage(ctx context.Context, channel, text string) error {
 // rate-limit backoffs but does NOT enqueue on failure — the caller (or the
 // retry drainer) decides what to do with the error.
 func sendDM(ctx context.Context, client *slacklib.Client, userSlackID, text string, blocks ...slacklib.Block) (channelID, timestamp string, err error) {
-	if err := throttleSlackSend(ctx, userSlackID); err != nil {
+	return sendDMEvery(ctx, client, userSlackID, sendInterval, text, blocks...)
+}
+
+// sendDMEvery is sendDM with its own minimum spacing since the last message to the same member.
+func sendDMEvery(ctx context.Context, client *slacklib.Client, userSlackID string, interval time.Duration, text string, blocks ...slacklib.Block) (channelID, timestamp string, err error) {
+	if err := throttleSlackSendEvery(ctx, userSlackID, interval); err != nil {
 		return "", "", fmt.Errorf("throttle slack send: %w", err)
 	}
 	ch, _, _, err := client.OpenConversationContext(ctx, &slacklib.OpenConversationParameters{

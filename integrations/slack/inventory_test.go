@@ -29,6 +29,12 @@ type invFake struct {
 	updates      []invMessage // chat.update
 	ephemerals   []invMessage // chat.postEphemeral
 	dmOpens      []string
+	joins        []string                    // conversations.join
+	postFail     map[string]string           // chat.postMessage channel -> Slack error code
+	updateFail   map[string]string           // chat.update channel -> Slack error code
+	reactions    map[string][]map[string]any // reactions.get channel -> reactions ({name, count, users})
+	reactionFail map[string]string           // reactions.get channel -> Slack error code
+	onPost       func(channel string)
 	views        []invViewCall
 	botsInfoFail bool
 }
@@ -49,9 +55,9 @@ type invViewCall struct {
 
 func newInvFakeSlack(t *testing.T) (*httptest.Server, *invFake) {
 	t.Helper()
-	prev := sendInterval
-	sendInterval = 0
-	t.Cleanup(func() { sendInterval = prev })
+	prev, prevInteractive := sendInterval, interactiveSendInterval
+	sendInterval, interactiveSendInterval = 0, 0
+	t.Cleanup(func() { sendInterval, interactiveSendInterval = prev, prevInteractive })
 
 	f := &invFake{}
 	mux := http.NewServeMux()
@@ -71,15 +77,59 @@ func newInvFakeSlack(t *testing.T) (*httptest.Server, *invFake) {
 	mux.HandleFunc("/api/chat.postMessage", func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
 		f.mu.Lock()
-		f.posts = append(f.posts, invMessage{Channel: r.FormValue("channel"), Text: r.FormValue("text"), Blocks: r.FormValue("blocks")})
+		code := f.postFail[r.FormValue("channel")]
+		if code == "" {
+			f.posts = append(f.posts, invMessage{Channel: r.FormValue("channel"), Text: r.FormValue("text"), Blocks: r.FormValue("blocks")})
+		}
+		hook := f.onPost
 		f.mu.Unlock()
+		if code != "" {
+			reply(w, map[string]any{"ok": false, "error": code})
+			return
+		}
+		if hook != nil {
+			hook(r.FormValue("channel"))
+		}
 		reply(w, map[string]any{"ok": true, "channel": r.FormValue("channel"), "ts": "1.1"})
+	})
+	mux.HandleFunc("/api/reactions.get", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		ch := r.FormValue("channel")
+		f.mu.Lock()
+		code := f.reactionFail[ch]
+		reactions := f.reactions[ch]
+		f.mu.Unlock()
+		if code != "" {
+			reply(w, map[string]any{"ok": false, "error": code})
+			return
+		}
+		reply(w, map[string]any{"ok": true, "type": "message", "channel": ch, "message": map[string]any{"reactions": reactions}})
+	})
+	mux.HandleFunc("/api/conversations.join", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		f.mu.Lock()
+		f.joins = append(f.joins, r.FormValue("channel"))
+		f.mu.Unlock()
+		reply(w, map[string]any{"ok": true, "channel": map[string]string{"id": r.FormValue("channel")}})
+	})
+	mux.HandleFunc("/api/emoji.list", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, map[string]any{"ok": true, "emoji": map[string]string{
+			"partyparrot": "https://emoji.example/partyparrot.gif",
+			"parrot":      "alias:partyparrot",
+		}})
 	})
 	mux.HandleFunc("/api/chat.update", func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
 		f.mu.Lock()
-		f.updates = append(f.updates, invMessage{Channel: r.FormValue("channel"), TS: r.FormValue("ts"), Text: r.FormValue("text"), Blocks: r.FormValue("blocks")})
+		code := f.updateFail[r.FormValue("channel")]
+		if code == "" {
+			f.updates = append(f.updates, invMessage{Channel: r.FormValue("channel"), TS: r.FormValue("ts"), Text: r.FormValue("text"), Blocks: r.FormValue("blocks")})
+		}
 		f.mu.Unlock()
+		if code != "" {
+			reply(w, map[string]any{"ok": false, "error": code})
+			return
+		}
 		reply(w, map[string]any{"ok": true, "channel": r.FormValue("channel"), "ts": r.FormValue("ts"), "text": r.FormValue("text")})
 	})
 	mux.HandleFunc("/api/chat.postEphemeral", func(w http.ResponseWriter, r *http.Request) {
@@ -329,7 +379,9 @@ func TestInventoryModalStates(t *testing.T) {
 		for i := range 25 {
 			many = append(many, store.InventoryItem{ID: fmt.Sprintf("i%d", i), Name: fmt.Sprintf("Thing %02d", i), Code: "ABC234"})
 		}
-		count := func(m slacklib.ModalViewRequest) int { return strings.Count(modalJSON(t, m), `"block_id":"inventory_held_i`) }
+		count := func(m slacklib.ModalViewRequest) int {
+			return strings.Count(modalJSON(t, m), `"block_id":"inventory_held_i`)
+		}
 
 		first := InventoryModal(inventoryModalData{Held: many, Notice: "hello"})
 		assert.LessOrEqual(t, len(first.Blocks.BlockSet), 100)
