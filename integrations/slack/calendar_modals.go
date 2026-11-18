@@ -200,9 +200,13 @@ func MyCalendarModal(cals []store.Calendar, selectedMemberIDs map[string]bool, t
 	var options []*slacklib.OptionBlockObject
 	var initial []*slacklib.OptionBlockObject
 	for _, c := range cals {
+		name := c.Name
+		if r := []rune(name); len(r) > 75 {
+			name = string(r[:75])
+		}
 		opt := slacklib.NewOptionBlockObject(
 			c.ID,
-			slacklib.NewTextBlockObject(slacklib.PlainTextType, c.Name, false, false),
+			slacklib.NewTextBlockObject(slacklib.PlainTextType, name, false, false),
 			nil,
 		)
 		options = append(options, opt)
@@ -211,12 +215,13 @@ func MyCalendarModal(cals []store.Calendar, selectedMemberIDs map[string]bool, t
 		}
 	}
 
-	elem := &slacklib.CheckboxGroupsBlockElement{
-		Type:           slacklib.METCheckboxGroups,
-		ActionID:       "my_cal_members_input",
-		Options:        options,
-		InitialOptions: initial,
-	}
+	elem := slacklib.NewOptionsMultiSelectBlockElement(
+		slacklib.MultiOptTypeStatic,
+		slacklib.NewTextBlockObject(slacklib.PlainTextType, "Select calendars", false, false),
+		"my_cal_members_input",
+		options...,
+	)
+	elem.InitialOptions = initial
 	block := slacklib.NewInputBlock(
 		"my_cal_members",
 		slacklib.NewTextBlockObject(slacklib.PlainTextType, "Calendars", false, false),
